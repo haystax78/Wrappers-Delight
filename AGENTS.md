@@ -1,0 +1,55 @@
+# Mesh Wrap Add-on
+
+## Overview
+Blender add-on that fits a cage mesh onto a target surface from matching
+curves drawn on both meshes. Result is stored in a `Wrapped` shape key.
+
+## Architecture
+- **model/** — scene data and pure helpers
+  - `properties.py`: `Scene.mesh_wrap` (`WrapSettings`) with `pairs` (`CurvePair`:
+    own control points per side, colour, sample count, closed, weight). Cage
+    points are cage-local on the Basis (rest) shape; target points target-local.
+    `landmarks` is a read-only shim for files from older versions.
+  - `pairs.py`: side helpers (`'CAGE'`/`'TARGET'`), status, creation, snapshots.
+  - `sampling.py`: arc-length resampling, RDP simplify, direction matching (numpy).
+  - `display.py`: cached surface-projected draw geometry per (pair, side).
+  - `legacy.py`, `snapping.py`.
+- **solver/** — numpy + mathutils only
+  - `transforms.py`: weighted similarity fit, polyharmonic landmark warp.
+  - `graph.py`: mesh adjacency, normals, confidence-weighted field diffusion.
+  - `surface.py`: `SurfaceProbe` (zero-copy queries on similarity transforms,
+    world BVH from arrays otherwise — never BMesh, targets can be millions of tris).
+  - `conform.py`: iterative conform that smooths the *displacement field*
+    (keeps cage shape), coarse→fine, exact snap + tangential relax.
+  - `pipeline.py`: `WrapJob` (validates up front, `run()` generator per stage).
+- **operators/** — sidebar ops; `fit.py` runs `WrapJob` modally (live preview, Esc cancels).
+- **editor/** — the two-view curve editor
+  - `stage.py`: new window or split view, local views, chrome hiding, camera link.
+  - `session.py`: modal operator (`meshwrap.editor`), Draw/Edit tools, private undo.
+  - Draw tool: drag = freehand, click = place points (live Catmull-Rom, drag
+    placed points), then PREVIEW with a point-count dial (wheel/arrows/digits,
+    also resamples the waiting half) before LMB confirms. One half ahead only.
+  - `picking.py`, `scene_draw.py` (2D screen-space curves through the stored
+    points, per-point raycast occlusion, cached per view), `hud.py` (2D),
+    `paint.py`, `theme.py`.
+- **ui/** — `panels.py` (sidebar: Mesh Wrap > Correspondences / Fit / Result), `overlay.py`.
+
+## Verification
+```bash
+# Syntax check
+find . -name "*.py" -exec python -m py_compile {} \;
+
+# Registration + functional test in Blender (Windows path example)
+"D:/blender-5.3.0-windows-x64/blender.exe" --background --factory-startup \
+  --python-expr "import sys; sys.path.insert(0, '<addons dir>'); import mesh_wrap; mesh_wrap.register(); mesh_wrap.unregister(); print('OK')"
+```
+The editor needs a real window (it can't run with `--background`); drive it with a
+`bpy.app.timers` script and `bpy.ops.screen.screenshot` to check the HUD.
+
+## Gotchas
+- Area positions are only final after the first redraw: `Stage.tidy()` fixes
+  cage/target order and re-hides chrome on the editor's timer.
+- Region visibility props (`show_region_header` …) crash Blender if set without
+  a window in context — always wrap in `temp_override(window=..., area=...)`.
+- Adding to a `CollectionProperty` can invalidate existing item references;
+  copy what you need before `pairs.add()`.

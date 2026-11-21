@@ -221,3 +221,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# local sync / OS clutter
+.DS_Store
+*.ffs_db
