@@ -22,7 +22,7 @@ from .. import preferences
 from ..model import display, sampling
 from ..model import pairs as P
 from ..model.properties import RESULT_KEY, redraw_views
-from . import hud, paint, picking, scene_draw
+from . import hud, paint, picking, scene_draw, symmetry
 from . import theme as T
 from . import stage as stage_mod
 from .stage import Stage
@@ -495,6 +495,11 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
             setattr(mw, attr, not getattr(mw, attr))
             if attr == "link_views" and mw.link_views:
                 self.stage.link.start()
+        elif ident == "view:wire":
+            state = stage_mod.toggle_wireframe(area)
+            if state is not None:
+                label = T.SIDE_LABEL.get(self.stage.side_of(area), "View")
+                self.say(f"{label.title()} wireframe {'on' if state else 'off'}")
         elif ident == "view:texture":
             state = stage_mod.toggle_texture(area)
             if state is not None:
@@ -1364,13 +1369,20 @@ def _result_key(cage):
 # =================================================================== draw ==
 
 def _draw_view(op):
-    """POST_VIEW: the surface-following cursor ring."""
+    """POST_VIEW: the X symmetry line and the surface-following cursor."""
     try:
-        if op.tool != 'DRAW' or op.cursor is None:
-            return
         area = bpy.context.area
         side = op.stage.side_of(area)
-        if side is None or op.cursor[0] not in op.view_sides(side):
+        if side is None:
+            return
+        if op.mw.symmetry:
+            dg = bpy.context.evaluated_depsgraph_get()
+            for s in op.view_sides(side):
+                obj = P.obj_for(op.mw, s)
+                if obj is not None:
+                    symmetry.draw(obj, obj.evaluated_get(dg).data)
+        if op.tool != 'DRAW' or op.cursor is None or \
+                op.cursor[0] not in op.view_sides(side):
             return
         rv3d = bpy.context.region_data
         if rv3d is None:

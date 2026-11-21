@@ -101,6 +101,26 @@ def shows_texture(space):
         return False
 
 
+def shows_wireframe(space):
+    """True when a 3D view overlays the mesh wireframe."""
+    try:
+        return bool(space.overlay.show_wireframes)
+    except (AttributeError, ReferenceError):
+        return False
+
+
+def toggle_wireframe(area):
+    """Flip the wireframe overlay of one view; returns the new state."""
+    space = area.spaces.active if area is not None else None
+    if space is None or space.type != 'VIEW_3D':
+        return None
+    try:
+        space.overlay.show_wireframes = not space.overlay.show_wireframes
+        return space.overlay.show_wireframes
+    except (AttributeError, RuntimeError):
+        return None
+
+
 def toggle_texture(area):
     """Flip one view between Texture colouring (in Solid shading) and the
     colour type it had before; returns the new state, or None if n/a."""

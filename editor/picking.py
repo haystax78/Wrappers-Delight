@@ -9,6 +9,7 @@ import numpy as np
 from bpy_extras import view3d_utils
 from mathutils import Vector
 
+from ..model import meshdata
 from ..model import pairs as P
 
 
@@ -134,12 +135,10 @@ def border_loops(mesh):
     """Open boundaries of ``mesh`` as [(closed, [vertex indices])]."""
     if not len(mesh.edges) or not len(mesh.loops):
         return []
-    edge_of_loop = np.empty(len(mesh.loops), dtype=np.int64)
-    mesh.loops.foreach_get("edge_index", edge_of_loop)
-    faces_per_edge = np.bincount(edge_of_loop, minlength=len(mesh.edges))
-    ev = np.empty(len(mesh.edges) * 2, dtype=np.int64)
-    mesh.edges.foreach_get("vertices", ev)
-    border = ev.reshape(-1, 2)[faces_per_edge == 1]
+    # bulk reads: per-element foreach_get takes seconds on dense scans
+    faces_per_edge = np.bincount(meshdata.corner_edges(mesh),
+                                 minlength=len(mesh.edges))
+    border = meshdata.edge_vertices(mesh)[faces_per_edge == 1]
 
     links = {}
     for a, b in border.tolist():
@@ -195,11 +194,9 @@ class BorderCache:
             else:
                 ev = obj.evaluated_get(depsgraph)
                 mesh = ev.data
-                co = np.empty(len(mesh.vertices) * 3)
-                mesh.vertices.foreach_get("co", co)
-                co = co.reshape(-1, 3)
+                co = meshdata.positions(mesh)
             for closed, idx in border_loops(mesh):
-                loops.append((closed, co[idx]))
+                loops.append((closed, np.asarray(co[idx], dtype=float)))
         self._loops[key] = loops
         return loops
 

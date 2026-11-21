@@ -22,7 +22,8 @@ from . import theme as T
 TOOLS = (("tool:DRAW", "Draw"), ("tool:EDIT", "Edit"))
 TOGGLES = (("toggle:xray", "X-Ray"), ("toggle:symmetry", "Mirror X"),
            ("toggle:snap_vertices", "Snap"), ("toggle:link_views", "Link"),
-           ("toggle:view_world_sync", "World"), ("view:texture", "Texture"))
+           ("toggle:view_world_sync", "World"), ("view:wire", "Wire"),
+           ("view:texture", "Texture"))
 ACTIONS = (("help", "?"), ("finish", "Done"))
 
 SHORTCUTS = (
@@ -55,6 +56,7 @@ SHORTCUTS = (
         ("Tab", "switch Draw / Edit"),
         ("F", "focus on surface under cursor"),
         ("Alt + Z", "x-ray curves"),
+        ("Wire / Texture", "per-view wireframe / textures"),
         ("L", "link views"),
         ("Shift + L", "sync in world space / per mesh"),
         ("Ctrl + Z / Ctrl + Shift + Z", "undo / redo"),
@@ -118,6 +120,8 @@ def _is_on(mw, ident):
         return bool(getattr(mw, ident[7:]))
     if ident == "view:texture":
         return stage_mod.shows_texture(bpy.context.space_data)
+    if ident == "view:wire":
+        return stage_mod.shows_wireframe(bpy.context.space_data)
     return False
 
 

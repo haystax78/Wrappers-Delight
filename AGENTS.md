@@ -13,6 +13,8 @@ curves drawn on both meshes. Result is stored in a `Wrapped` shape key.
   - `pairs.py`: side helpers (`'CAGE'`/`'TARGET'`), status, creation, snapshots.
   - `sampling.py`: arc-length resampling, RDP simplify, direction matching (numpy).
   - `display.py`: cached surface-projected draw geometry per (pair, side).
+  - `meshdata.py`: bulk mesh array reads (int attributes copied straight from
+    memory with a layout check; RNA `foreach_get` takes seconds on dense scans).
   - `legacy.py`, `snapping.py`.
 - **solver/** — numpy + mathutils only
   - `transforms.py`: weighted similarity fit, polyharmonic landmark warp.
@@ -33,7 +35,9 @@ curves drawn on both meshes. Result is stored in a `Wrapped` shape key.
     placed points), then PREVIEW with a point-count dial (wheel/arrows/digits,
     also resamples the waiting half) before LMB confirms. One half ahead only.
   - `picking.py`, `scene_draw.py` (2D screen-space curves through the stored
-    points, per-point raycast occlusion, cached per view), `hud.py` (2D),
+    points, per-point raycast occlusion; geometry cached per view, GPU batches
+    per half cached per view + style), `symmetry.py` (X=0 slice line, cached
+    batch, depth-biased), `hud.py` (2D),
     `paint.py`, `theme.py`.
 - **ui/** — `panels.py` (sidebar: Mesh Wrap > Correspondences / Fit / Result), `overlay.py`.
 

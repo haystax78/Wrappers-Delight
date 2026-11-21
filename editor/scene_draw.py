@@ -15,7 +15,9 @@ recomputed only when the view, the object or the points change.
 
 
 import bpy
+import gpu
 import numpy as np
+from gpu_extras.batch import batch_for_shader
 from mathutils import Vector
 
 from ..model import pairs as P
@@ -25,7 +27,9 @@ OUTLINE = (0.0, 0.0, 0.0, 0.6)
 HIDDEN_ALPHA = 0.3
 SMOOTH_SUBDIV = 6
 
-_CACHE = {}       # (region pointer, side) -> (key, [HalfView])
+_CACHE = {}       # (region pointer, side) -> (key, generation, [HalfView])
+_BATCHES = {}     # (region pointer, side) -> ((generation, style), batches)
+_GEN = [0]
 
 
 class DrawOptions:
@@ -53,6 +57,7 @@ class HalfView:
 
 def invalidate():
     _CACHE.clear()
+    _BATCHES.clear()
 
 
 # ---------------------------------------------------------------- geometry --
@@ -72,17 +77,17 @@ def smooth_polyline(pts, closed=False, subdiv=SMOOTH_SUBDIV):
     else:
         ext = np.vstack([P2[:1], P2, P2[-1:]])
         spans = n - 1
-    t = np.arange(subdiv, dtype=float)[:, None] / subdiv
+    t = (np.arange(subdiv, dtype=float) / subdiv)[None, :, None]
     t2, t3 = t * t, t * t * t
-    out = []
-    for i in range(spans):
-        p0, p1, p2, p3 = ext[i], ext[i + 1], ext[i + 2], ext[i + 3]
-        seg = 0.5 * (2.0 * p1 + (p2 - p0) * t
-                     + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
-                     + (3.0 * p1 - p0 - 3.0 * p2 + p3) * t3)
-        out.extend(map(tuple, seg))
-    out.append(tuple(P2[0] if closed else P2[-1]))
-    return out
+    p0 = ext[0:spans][:, None, :]
+    p1 = ext[1:spans + 1][:, None, :]
+    p2 = ext[2:spans + 2][:, None, :]
+    p3 = ext[3:spans + 3][:, None, :]
+    seg = 0.5 * (2.0 * p1 + (p2 - p0) * t
+                 + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+                 + (3.0 * p1 - p0 - 3.0 * p2 + p3) * t3)
+    out = seg.reshape(-1, 2)
+    return np.vstack([out, (P2[0] if closed else P2[-1])[None, :]])
 
 
 def visibility(obj, depsgraph, region, rv3d, world_pts):
@@ -158,7 +163,7 @@ def _halves(mw, side, obj, region, rv3d):
     slot = (region.as_pointer(), side)
     hit = _CACHE.get(slot)
     if hit is not None and hit[0] == key:
-        return hit[1]
+        return hit[1], hit[2]
     dg = bpy.context.evaluated_depsgraph_get()
     out = []
     for uid, cos, closed, color, enabled in items:
@@ -170,30 +175,45 @@ def _halves(mw, side, obj, region, rv3d):
         markers = [((float(p[0]), float(p[1])) if f else None, bool(v))
                    for p, f, v in zip(xy, front, vis)]
         out.append(HalfView(uid, color, enabled, runs, markers))
-    _CACHE[slot] = (key, out)
-    return out
+    _GEN[0] += 1
+    _CACHE[slot] = (key, _GEN[0], out)
+    return _GEN[0], out
 
 
 def draw_side(mw, side, obj, region, rv3d, opts):
     """Draw every visible pair's ``side`` half in this region."""
     if obj is None or region is None or rv3d is None:
         return
-    halves = _halves(mw, side, obj, region, rv3d)
+    gen, halves = _halves(mw, side, obj, region, rv3d)
     if not halves:
         return
-    # active pair last so it sits on top
-    halves = sorted(halves, key=lambda h: h.uid == opts.active_uid)
-    for h in halves:
-        _draw_half(h, side, opts)
+    style = (opts.active_uid, opts.hover, bool(opts.xray), bool(opts.controls),
+             bool(opts.dim_others), paint.px(1.0))
+    slot = (region.as_pointer(), side)
+    hit = _BATCHES.get(slot)
+    if hit is None or hit[0] != (gen, style):
+        # active pair last so it sits on top
+        ordered = sorted(halves, key=lambda h: h.uid == opts.active_uid)
+        items = []
+        for h in ordered:
+            items.extend(_build_half(h, opts))
+        hit = ((gen, style), items)
+        _BATCHES[slot] = hit
+    _issue(hit[1])
 
 
 WHITE = (1.0, 1.0, 1.0, 1.0)
+DOT_SEGS = 14
 
 
-def _draw_half(h, side, opts):
-    """Pair-coloured line with a dark outline and light dots at its points;
-    a single-point pair is one larger dot.  Editing shows the points larger,
-    the hovered one ringed in white."""
+def _build_half(h, opts):
+    """GPU batches for one half, in drawing order: outline, line, dots.
+
+    Same look as drawing each piece on its own: pair-coloured line with a
+    dark outline and light dots at its points; a single-point pair is one
+    larger dot; editing shows the points larger, the hovered one ringed in
+    white.
+    """
     active = h.uid == opts.active_uid
     alpha = 1.0
     if not h.enabled:
@@ -202,14 +222,27 @@ def _draw_half(h, side, opts):
         alpha = 0.55
     base = h.color + (1.0,)
     width = paint.px(4.0 if active else 2.5)
+    out = []
+
+    seg_o, col_o, seg_l, col_l = [], [], [], []
     for pts, visible in h.runs:
-        if not (visible or opts.xray):
+        if not (visible or opts.xray) or len(pts) < 2:
             continue
         a = alpha * (1.0 if visible else HIDDEN_ALPHA)
+        P2 = np.asarray(pts, dtype=np.float32)
+        segs = np.empty((2 * (len(P2) - 1), 2), np.float32)
+        segs[0::2] = P2[:-1]
+        segs[1::2] = P2[1:]
         if visible:
-            paint.polyline_2d(pts, paint.with_alpha(OUTLINE, OUTLINE[3] * a),
-                              width + paint.px(2.5))
-        paint.polyline_2d(pts, paint.with_alpha(base, a), width)
+            seg_o.append(segs)
+            col_o.append(np.tile(paint.with_alpha(OUTLINE, OUTLINE[3] * a),
+                                 (len(segs), 1)))
+        seg_l.append(segs)
+        col_l.append(np.tile(paint.with_alpha(base, a), (len(segs), 1)))
+    if seg_o:
+        out.append(_lines(seg_o, col_o, width + paint.px(2.5)))
+    if seg_l:
+        out.append(_lines(seg_l, col_l, width))
 
     single = len(h.markers) == 1
     if single:
@@ -220,23 +253,75 @@ def _draw_half(h, side, opts):
     else:
         size, edge = (6.0 if active else 4.5), 0.0
         col = paint.mix(base, WHITE, 0.55)
+    centres, radii, colors = [], [], []
     for i, (xy, visible) in enumerate(h.markers):
         if xy is None or not (visible or opts.xray):
             continue
         a = alpha * (1.0 if visible else HIDDEN_ALPHA)
-        x, y = xy
         if opts.hover is not None and opts.hover == (h.uid, i):
-            _dot(x, y, 17.0, (0.0, 0.0, 0.0, 0.8))
-            _dot(x, y, 13.0, WHITE)
-            _dot(x, y, 8.0, base)
+            for d, c in ((17.0, (0.0, 0.0, 0.0, 0.8)), (13.0, WHITE),
+                         (8.0, base)):
+                centres.append(xy)
+                radii.append(paint.px(d) / 2.0)
+                colors.append(c)
             continue
         if edge and visible:
-            _dot(x, y, size + edge, paint.with_alpha(OUTLINE, OUTLINE[3] * a))
-        _dot(x, y, size, paint.with_alpha(col, a))
+            centres.append(xy)
+            radii.append(paint.px(size + edge) / 2.0)
+            colors.append(paint.with_alpha(OUTLINE, OUTLINE[3] * a))
+        centres.append(xy)
+        radii.append(paint.px(size) / 2.0)
+        colors.append(paint.with_alpha(col, a))
+    if centres:
+        out.append(_discs(centres, radii, colors))
+    return out
 
 
-def _dot(x, y, diameter, color):
-    paint.circle(x, y, paint.px(diameter) / 2.0, color, seg=14)
+def _lines(seg_list, col_list, width):
+    pos = np.vstack(seg_list)
+    pos3 = np.zeros((len(pos), 3), np.float32)
+    pos3[:, :2] = pos
+    sh = paint.shader('POLYLINE_FLAT_COLOR')
+    batch = batch_for_shader(sh, 'LINES', {"pos": pos3,
+                                           "color": np.vstack(col_list)
+                                           .astype(np.float32)})
+    return ('line', sh, batch, width)
+
+
+_RING = np.stack([np.cos(np.linspace(0.0, 2.0 * np.pi, DOT_SEGS + 1)),
+                  np.sin(np.linspace(0.0, 2.0 * np.pi, DOT_SEGS + 1))], 1)
+
+
+def _discs(centres, radii, colors):
+    """Filled circles as one triangle list (drawn in the given order)."""
+    C = np.asarray(centres, np.float32)
+    R = np.asarray(radii, np.float32)
+    n = len(C)
+    rim = C[:, None, :] + R[:, None, None] * _RING[None, :, :]   # n, s+1, 2
+    tris = np.empty((n, DOT_SEGS, 3, 3), np.float32)
+    tris[..., 2] = 0.0
+    tris[:, :, 0, :2] = C[:, None, :]
+    tris[:, :, 1, :2] = rim[:, :-1]
+    tris[:, :, 2, :2] = rim[:, 1:]
+    col = np.repeat(np.asarray(colors, np.float32), DOT_SEGS * 3, axis=0)
+    sh = paint.shader('FLAT_COLOR')
+    batch = batch_for_shader(sh, 'TRIS', {"pos": tris.reshape(-1, 3),
+                                          "color": col})
+    return ('tris', sh, batch, 0.0)
+
+
+def _issue(items):
+    if not items:
+        return
+    gpu.state.blend_set('ALPHA')
+    vp = paint._viewport()
+    for kind, sh, batch, width in items:
+        sh.bind()
+        if kind == 'line':
+            sh.uniform_float("lineWidth", width)
+            sh.uniform_float("viewportSize", vp)
+        batch.draw(sh)
+    gpu.state.blend_set('NONE')
 
 
 def dense_spline(world_pts, per_segment=10):
