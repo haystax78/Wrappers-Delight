@@ -57,6 +57,12 @@ def _pair_changed(self, context):
     redraw_views()
 
 
+def _samples_changed(self, context):
+    from . import pairs
+    pairs.resample_pair(context, self, self.samples)
+    redraw_views()
+
+
 def _sync_space_changed(self, context):
     from ..editor import session
     session.sync_space_changed()
@@ -86,13 +92,19 @@ class CurvePair(bpy.types.PropertyGroup):
         description="Treat both halves as closed loops",
     )
     samples: bpy.props.IntProperty(
-        name="Samples", default=8, min=2, max=256, update=redraw_views,
-        description="Number of matched points generated along this pair "
-                    "when fitting",
+        name="Samples", default=8, min=2, max=256, update=_samples_changed,
+        description="Number of points along this pair. Changing it "
+                    "resamples both curves evenly along their shape",
     )
     weight: bpy.props.FloatProperty(
         name="Influence", default=1.0, min=0.0, max=10.0, soft_max=4.0,
         description="Relative influence of this pair on the initial alignment",
+    )
+    lock: bpy.props.FloatProperty(
+        name="Lock", default=0.0, min=0.0, max=1.0, subtype='FACTOR',
+        description="Hold this pair's cage curve on its target curve while "
+                    "the surface fit relaxes. 0: free to slide, 1: stays "
+                    "exactly where the target curve was placed",
     )
     hidden: bpy.props.BoolProperty(
         name="Hidden", default=False, update=_pair_changed,

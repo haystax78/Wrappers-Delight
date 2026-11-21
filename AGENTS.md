@@ -7,7 +7,7 @@ curves drawn on both meshes. Result is stored in a `Wrapped` shape key.
 ## Architecture
 - **model/** — scene data and pure helpers
   - `properties.py`: `Scene.mesh_wrap` (`WrapSettings`) with `pairs` (`CurvePair`:
-    own control points per side, colour, sample count, closed, weight). Cage
+    own control points per side, colour, sample count, closed, weight, lock). Cage
     points are cage-local on the Basis (rest) shape; target points target-local.
     `landmarks` is a read-only shim for files from older versions.
   - `pairs.py`: side helpers (`'CAGE'`/`'TARGET'`), status, creation, snapshots.
@@ -26,8 +26,13 @@ curves drawn on both meshes. Result is stored in a `Wrapped` shape key.
     smoothing of positions (stiffness annealed, tangential from stage 3 so
     rows stay evenly spread in creases), then exact snaps with tangential
     evening-out. Excluded verts ramp back in via `pipeline.exclude_ramp`.
+    `CurveLocks`: per-pair Lock holds cage-surface points (triangle +
+    barycentric) on their target points, re-applied after every step. The
+    whole drawn curve is locked (`pipeline.LOCK_DENSITY` Catmull-Rom points
+    per segment, same parameters on both halves), not just the samples.
   - `pipeline.py`: `WrapJob` (validates up front, `run()` generator per stage).
 - **operators/** — sidebar ops; `fit.py` runs `WrapJob` modally (live preview, Esc cancels).
+  `pairs.py` has `meshwrap.pair_pick` (eyedropper: click a curve in any 3D view).
 - **editor/** — the two-view curve editor
   - `stage.py`: new window or split view, local views, chrome hiding, camera link.
   - `session.py`: modal operator (`meshwrap.editor`), Draw/Edit tools, private undo.

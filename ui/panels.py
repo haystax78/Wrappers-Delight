@@ -134,6 +134,8 @@ class MESHWRAP_PT_pairs(_Panel, bpy.types.Panel):
         row.template_list("MESHWRAP_UL_pairs", "", mw, "pairs", mw,
                           "pair_index", rows=5)
         side = row.column(align=True)
+        side.operator("meshwrap.pair_pick", text="", icon='EYEDROPPER')
+        side.separator()
         side.operator("meshwrap.pair_remove", text="", icon='REMOVE')
         side.separator()
         side.operator("meshwrap.pair_move", text="",
@@ -154,6 +156,7 @@ class MESHWRAP_PT_pairs(_Panel, bpy.types.Panel):
             col.prop(pair, "samples")
             col.prop(pair, "closed")
         col.prop(pair, "weight")
+        col.prop(pair, "lock", slider=True)
 
         row = box.row(align=True)
         for s in P.SIDES:

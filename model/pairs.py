@@ -70,6 +70,55 @@ def sample_count(pair):
     return 1 if is_point_pair(pair) else max(2, pair.samples)
 
 
+# ------------------------------------------------------------- resampling ---
+
+# (scene, uid, side) -> (source points, points last written from them), so
+# stepping the count down and back up resamples the original shape instead of
+# losing detail each time.  Any other edit of the points starts a new source.
+_SOURCES = {}
+
+
+def resample_pair(context, pair, count):
+    """Respace both halves of ``pair`` to ``count`` points with the editor's
+    resampling (:func:`sampling.resample_stroke`, as for clicked points),
+    snapped back onto the surface.  Halves that already have ``count``
+    points are left alone."""
+    import numpy as np
+
+    from . import display, sampling, snapping
+    if is_point_pair(pair) or count < 2:
+        return
+    scene = pair.id_data
+    mw = getattr(scene, "mesh_wrap", None)
+    if mw is None:
+        return
+    depsgraph = None
+    for side in SIDES:
+        cur = coords(pair, side)
+        obj = obj_for(mw, side)
+        if len(cur) < 2 or len(cur) == count or obj is None:
+            continue
+        slot = (scene.name, pair.uid, side)
+        src, last = _SOURCES.get(slot, (None, None))
+        if last is None or len(last) != len(cur) or not np.allclose(
+                np.asarray(last), np.asarray(cur), atol=1e-7):
+            src = cur
+        closed = pair.closed and len(src) > 2
+        # exactly what the editor does with clicked points: world space,
+        # Catmull-Rom through the points, even arc-length spacing
+        M = np.array(obj.matrix_world)
+        world = np.asarray(src, float) @ M[:3, :3].T + M[:3, 3]
+        pts = sampling.resample_stroke(world, 'POINTS', closed, count)
+        pts = (pts - M[:3, 3]) @ np.linalg.inv(M[:3, :3]).T
+        if depsgraph is None:
+            depsgraph = context.evaluated_depsgraph_get()
+        pts = snapping.to_side(mw, side, depsgraph, pts)
+        out = [tuple(map(float, p)) for p in pts]
+        set_coords(pair, side, out)
+        _SOURCES[slot] = (src, [tuple(p.co) for p in points(pair, side)])
+    display.invalidate(pair.uid)
+
+
 def counts(mw):
     complete = sum(1 for p in mw.pairs if is_complete(p))
     return complete, len(mw.pairs) - complete
@@ -135,7 +184,8 @@ def remove(mw, index):
 # ------------------------------------------------------------ snapshots ---
 # Used by the curve editor's private undo history.
 
-_FIELDS = ('uid', 'name', 'closed', 'samples', 'weight', 'hidden', 'enabled')
+_FIELDS = ('uid', 'name', 'closed', 'samples', 'weight', 'lock', 'hidden',
+           'enabled')
 
 
 def snapshot(mw):

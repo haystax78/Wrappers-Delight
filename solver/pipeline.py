@@ -18,6 +18,7 @@ from .surface import SurfaceProbe, tree_from_arrays
 from .transforms import LandmarkWarp, fit_similarity
 
 MIN_SAMPLES = 3
+LOCK_DENSITY = 8     # locked points per curve segment (between samples)
 
 
 
@@ -53,6 +54,21 @@ def exclude_ramp(graph, X, frozen, landmarks, smooth_passes=8):
     ramp = t * t * (3.0 - 2.0 * t)
     ramp[frozen] = 0.0
     return ramp
+
+
+def _barycentric(tri, p):
+    """Barycentric weights of ``p`` (on or near) triangle ``tri`` (3, 3)."""
+    a, b, c = tri
+    v0, v1, v2 = b - a, c - a, p - a
+    d00, d01, d11 = v0 @ v0, v0 @ v1, v1 @ v1
+    d20, d21 = v2 @ v0, v2 @ v1
+    den = d00 * d11 - d01 * d01
+    if abs(den) < 1e-30:
+        return np.array([1.0, 0.0, 0.0])
+    v = (d11 * d20 - d01 * d21) / den
+    w = (d00 * d21 - d01 * d20) / den
+    bc = np.clip(np.array([1.0 - v - w, v, w]), 0.0, None)
+    return bc / max(bc.sum(), 1e-12)
 
 
 def _samples(cos, count, closed):
@@ -140,6 +156,7 @@ class WrapJob:
         cage_tree = tree_from_arrays(verts, tris) if len(tris) else None
         Mt = np.array(self.target.matrix_world)
         src, dst, wts = [], [], []
+        lock_tri, lock_bary, lock_dst, lock_w = [], [], [], []
         for pair in mw.pairs:
             if not (pair.enabled and P.is_complete(pair)):
                 continue
@@ -148,22 +165,61 @@ class WrapJob:
             # drawn curves store exactly ``count`` points: use them as they are
             a = _samples(P.coords(pair, 'CAGE'), count, closed)
             b = _samples(P.coords(pair, 'TARGET'), count, closed)
-            if cage_tree is not None:
-                for i, co in enumerate(a):
-                    loc = cage_tree.find_nearest(Vector(co))[0]
-                    if loc is not None:
-                        a[i] = loc
             bw = _affine(Mt, b)
             for i, co in enumerate(bw):
                 loc, _n = self.probe.nearest_one(co)
                 if loc is not None:
                     bw[i] = loc
+            if cage_tree is not None:
+                for i, co in enumerate(a):
+                    loc = cage_tree.find_nearest(Vector(co))[0]
+                    if loc is not None:
+                        a[i] = loc
+                if pair.lock > 0.0:
+                    # lock the whole drawn curve, not only its samples, so
+                    # the cage curve can't bow away between them
+                    for tri, bc, q in self._curve_lock_points(
+                            a, b, closed, Mt, verts, tris, cage_tree,
+                            self.lock_density):
+                        lock_tri.append(tri)
+                        lock_bary.append(bc)
+                        lock_dst.append(q)
+                        lock_w.append(pair.lock)
             src.append(_affine(self.Mc, a))
             dst.append(bw)
             wts.append(np.full(len(a), pair.weight))
+        self.locks = conform_mod.CurveLocks(lock_tri, lock_bary, lock_dst,
+                                            lock_w)
         if not src:
             return np.zeros((0, 3)), np.zeros((0, 3)), np.zeros(0)
         return np.vstack(src), np.vstack(dst), np.concatenate(wts)
+
+    lock_density = LOCK_DENSITY
+
+    def _curve_lock_points(self, a, b, closed, Mt, verts, tris, cage_tree,
+                           density):
+        """(cage triangle, barycentric, target world point) along a pair.
+
+        Both halves are traced with the same Catmull-Rom the editor draws
+        them with, at the same parameters, so point k on the cage curve
+        matches point k on the target curve; each is put back on its
+        surface (cage rest shape / target)."""
+        closed = closed and len(a) > 2
+        if len(a) >= 2 and len(a) == len(b) and density > 1:
+            da = sampling.catmull_rom(a, closed, density)
+            db = sampling.catmull_rom(b, closed, density)
+        else:
+            da, db = np.asarray(a, float), np.asarray(b, float)
+        dbw = _affine(Mt, db)
+        for ca, cb in zip(da, dbw):
+            loc, _nrm, ti, _d = cage_tree.find_nearest(Vector(ca))
+            if loc is None:
+                continue
+            q, _n = self.probe.nearest_one(cb)
+            if q is None:
+                q = cb
+            tri = tris[ti]
+            yield tri, _barycentric(verts[tri], np.array(loc)), np.asarray(q)
 
     # ----------------------------------------------------------- run --
 
@@ -179,6 +235,9 @@ class WrapJob:
         if len(self.src) >= 4:
             warp = LandmarkWarp(src_a, self.dst - src_a, relax=mw.warp_relax)
             X = X + warp(X)
+        locks = self.locks
+        if locks:
+            locks.enforce(X, np.ones(len(X), bool))
         yield 0.14, "Warped", X
 
         if mw.fit_surface:
@@ -199,11 +258,14 @@ class WrapJob:
             ramp = exclude_ramp(graph, X0, frozen, self.dst)
             for k, total, X in conform_mod.conform(X0, graph, self.probe,
                                                    params, pins=pins,
-                                                   frozen=frozen):
+                                                   frozen=frozen,
+                                                   locks=locks):
                 if ramp is not None:
                     # ease from the warped shape at the excluded area to the
                     # full wrap at the nearest landmarks
                     X = X0 + ramp[:, None] * (X - X0)
+                    if locks:
+                        locks.enforce(X, ~frozen)
                 yield 0.14 + 0.86 * k / total, f"Conforming {k}/{total}", X
         self.result_world = X
         yield 1.0, "Done", X

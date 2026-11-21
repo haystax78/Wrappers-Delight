@@ -102,11 +102,69 @@ def _targets(P, N, probe, graph, reach, facing, active, use_rays, fill):
     return T, ok
 
 
+class CurveLocks:
+    """Points on the cage surface held on target positions.
+
+    Each locked sample is a point inside a cage triangle (vertex indices +
+    barycentric weights) with the world position it should sit at and a
+    strength 0..1.  :meth:`enforce` moves the triangle's vertices so the
+    point moves that fraction of the way to its target; repeated every
+    solver step, strength 1 holds the point exactly while weaker locks
+    settle where they balance against the smoothing.
+    """
+
+    def __init__(self, tris, bary, targets, strength):
+        keep = np.asarray(strength, float) > 0.0
+        self.tris = np.asarray(tris, np.int64).reshape(-1, 3)[keep]
+        self.bary = np.asarray(bary, float).reshape(-1, 3)[keep]
+        self.targets = np.asarray(targets, float).reshape(-1, 3)[keep]
+        self.strength = np.asarray(strength, float)[keep]
+
+    def __bool__(self):
+        return len(self.strength) > 0
+
+    def error(self, P):
+        p = (P[self.tris] * self.bary[:, :, None]).sum(axis=1)
+        return np.linalg.norm(self.targets - p, axis=1)
+
+    def enforce(self, P, movable, passes=12):
+        """Move ``movable`` vertices of ``P`` (in place) toward the locks."""
+        if not self:
+            return
+        m = movable[self.tris]                       # (k, 3)
+        b = np.where(m, self.bary, 0.0)
+        den = (b * b).sum(axis=1)
+        live = den > 1e-12
+        if not live.any():
+            return
+        tris, b, bary = self.tris[live], b[live], self.bary[live]
+        gain = (1.0 / den[live])[:, None]
+        # this call moves each point ``strength`` of the way to its target
+        p = (P[tris] * bary[:, :, None]).sum(axis=1)
+        s = self.strength[live][:, None]
+        goal = p + s * (self.targets[live] - p)
+        flat = tris.ravel()
+        n = len(P)
+        cnt = np.bincount(flat, weights=b.ravel(), minlength=n)
+        touched = cnt > 0
+        for _ in range(passes):
+            p = (P[tris] * bary[:, :, None]).sum(axis=1)
+            e = (goal - p) * gain
+            # smallest move of one triangle that carries its point by
+            # strength * error is b_v * error / sum(b^2) per vertex; a vertex
+            # shared by several locks takes the b-weighted mean of its moves
+            mv = (b[:, :, None] * b[:, :, None] * e[:, None, :]).reshape(-1, 3)
+            acc = np.stack([np.bincount(flat, weights=mv[:, c], minlength=n)
+                            for c in range(3)], axis=1)
+            P[touched] += acc[touched] / cnt[touched, None]
+
+
 def _tangential(U, N):
     return U - (U * N).sum(axis=1, keepdims=True) * N
 
 
-def conform(P0, graph, probe, params, attract=None, pins=None, frozen=None):
+def conform(P0, graph, probe, params, attract=None, pins=None, frozen=None,
+            locks=None):
     """Generator: yields ``(step, total, P)`` after every stage.
 
     attract  bool (n,) vertices that seek the surface (default: all);
@@ -114,6 +172,7 @@ def conform(P0, graph, probe, params, attract=None, pins=None, frozen=None):
     pins     {vertex index: world position} held fixed throughout.
     frozen   bool (n,) vertices that keep their starting position; their
              neighbours still see them, so the cage stays continuous.
+    locks    :class:`CurveLocks` re-applied after every step.
     """
     P = np.array(P0, dtype=float)
     n = len(P)
@@ -147,6 +206,8 @@ def conform(P0, graph, probe, params, attract=None, pins=None, frozen=None):
             if along:
                 U = _tangential(U, N)
             P[free] += stiff * U[free]
+            if locks:
+                locks.enforce(P, free, passes=3)
         yield k + 1, total, P
 
     # exact snaps with tangential evening-out in between
@@ -160,4 +221,6 @@ def conform(P0, graph, probe, params, attract=None, pins=None, frozen=None):
         if j < snaps - 1:
             U = _tangential(graph.umbrella(P), N)
             P[free] += 0.5 * U[free]
+        if locks:
+            locks.enforce(P, free)
         yield params.iterations + j + 1, total, P
