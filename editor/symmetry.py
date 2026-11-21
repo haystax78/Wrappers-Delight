@@ -7,6 +7,7 @@ multi-million-face targets) and kept as a GPU batch until the mesh or its
 transform changes.
 """
 
+import bpy
 import gpu
 import numpy as np
 from gpu_extras.batch import batch_for_shader
@@ -18,6 +19,7 @@ from . import paint
 COLOR = (1.0, 0.24, 0.32, 0.85)     # Blender's X-axis red
 WIDTH = 1.75
 DEPTH_BIAS = 2e-4                   # pull the line just in front of the surface
+ORTHO_BIAS = 0.01                   # same, orthographic: fraction of view distance
 
 _CACHE = {}       # object name -> (key, batch or None)
 
@@ -99,7 +101,14 @@ def draw(obj, mesh):
         return
     proj = gpu.matrix.get_projection_matrix()
     bias = Matrix.Identity(4)
-    bias[2][2] = 1.0 - DEPTH_BIAS
+    if abs(proj[3][3]) > 0.5:
+        # orthographic: scaling depth does nothing near the view centre, so
+        # shift by a fixed distance toward the viewer (scaled with the zoom)
+        rv3d = getattr(bpy.context, "region_data", None)
+        dist = rv3d.view_distance if rv3d is not None else 1.0
+        bias[2][3] = -ORTHO_BIAS * dist * abs(proj[2][2])
+    else:
+        bias[2][2] = 1.0 - DEPTH_BIAS
     sh = paint.shader('POLYLINE_UNIFORM_COLOR')
     with gpu.matrix.push_pop_projection():
         gpu.matrix.load_projection_matrix(bias @ proj)
