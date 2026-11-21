@@ -64,6 +64,44 @@ class MeshGraph:
         length[length < 1e-20] = 1.0
         return N / length
 
+    def distances(self, P, sources):
+        """Shortest edge-path length from the nearest of ``sources`` to every
+        vertex, and which source that is (index into the vertex array; -1
+        where unreachable).  Multi-source Dijkstra over the edges."""
+        import heapq
+        if not hasattr(self, "_csr"):
+            a = np.concatenate([self.a, self.b])
+            b = np.concatenate([self.b, self.a])
+            order = np.argsort(a, kind="stable")
+            start = np.zeros(self.n + 1, dtype=np.int64)
+            np.cumsum(np.bincount(a, minlength=self.n), out=start[1:])
+            self._csr = (start, b[order], a[order])
+        start, nbr, own = self._csr
+        length = np.linalg.norm(P[nbr] - P[own], axis=1)
+        dist = np.full(self.n, np.inf)
+        label = np.full(self.n, -1, dtype=np.int64)
+        heap = []
+        for s in np.unique(np.asarray(sources, dtype=np.int64)).tolist():
+            dist[s] = 0.0
+            label[s] = s
+            heap.append((0.0, s))
+        heapq.heapify(heap)
+        start_l, nbr_l, len_l = start.tolist(), nbr.tolist(), length.tolist()
+        dist_l, label_l = dist.tolist(), label.tolist()
+        while heap:
+            d, v = heapq.heappop(heap)
+            if d > dist_l[v]:
+                continue
+            src = label_l[v]
+            for e in range(start_l[v], start_l[v + 1]):
+                u = nbr_l[e]
+                nd = d + len_l[e]
+                if nd < dist_l[u]:
+                    dist_l[u] = nd
+                    label_l[u] = src
+                    heapq.heappush(heap, (nd, u))
+        return np.array(dist_l), np.array(label_l, dtype=np.int64)
+
     def blend(self, field, weight, passes):
         """Confidence-weighted diffusion of a per-vertex vector field.
 

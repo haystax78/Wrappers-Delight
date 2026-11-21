@@ -88,6 +88,41 @@ def _restore_chrome(space, saved):
     space.overlay.show_text = saved["show_text"]
 
 
+# area pointer -> solid colour type to return to when Texture is turned off
+_TEX_PREV_COLOR = {}
+
+
+def shows_texture(space):
+    """True when a 3D view shows Solid shading with Texture colouring."""
+    try:
+        return (space.shading.type == 'SOLID'
+                and space.shading.color_type == 'TEXTURE')
+    except (AttributeError, ReferenceError):
+        return False
+
+
+def toggle_texture(area):
+    """Flip one view between Texture colouring (in Solid shading) and the
+    colour type it had before; returns the new state, or None if n/a."""
+    space = area.spaces.active if area is not None else None
+    if space is None or space.type != 'VIEW_3D':
+        return None
+    try:
+        shading = space.shading
+        key = area.as_pointer()
+        if shows_texture(space):
+            prev = _TEX_PREV_COLOR.pop(key, 'MATERIAL')
+            shading.color_type = prev if prev != 'TEXTURE' else 'MATERIAL'
+            return False
+        if shading.color_type != 'TEXTURE':
+            _TEX_PREV_COLOR[key] = shading.color_type
+        shading.type = 'SOLID'
+        shading.color_type = 'TEXTURE'
+        return True
+    except (AttributeError, RuntimeError, TypeError):
+        return None
+
+
 class Stage:
     def __init__(self):
         self.window = None

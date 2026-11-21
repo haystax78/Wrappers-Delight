@@ -176,7 +176,9 @@ class WrapSettings(bpy.types.PropertyGroup):
         description="Cage vertex group left out of the surface fit. Its "
                     "vertices keep the shape the landmark warp gave them "
                     "instead of snapping onto the target (useful for inner "
-                    "lips, eye sockets, mouth bags)",
+                    "lips, eye sockets, mouth bags). Vertices between the "
+                    "group and the nearest landmarks ease smoothly into the "
+                    "full wrap",
     )
     reach: bpy.props.FloatProperty(
         name="Reach", default=0.12, min=0.005, max=1.0, subtype='FACTOR',

@@ -12,14 +12,17 @@ mouse hit-testing always agree.
 
 import time
 
+import bpy
+
 from ..model import pairs as P
 from . import paint
+from . import stage as stage_mod
 from . import theme as T
 
 TOOLS = (("tool:DRAW", "Draw"), ("tool:EDIT", "Edit"))
 TOGGLES = (("toggle:xray", "X-Ray"), ("toggle:symmetry", "Mirror X"),
            ("toggle:snap_vertices", "Snap"), ("toggle:link_views", "Link"),
-           ("toggle:view_world_sync", "World"))
+           ("toggle:view_world_sync", "World"), ("view:texture", "Texture"))
 ACTIONS = (("help", "?"), ("finish", "Done"))
 
 SHORTCUTS = (
@@ -108,6 +111,15 @@ def over_ui(region, xy):
 
 
 # -------------------------------------------------------------------- draw --
+
+def _is_on(mw, ident):
+    """Lit state of a dock toggle (scene setting, or this view's shading)."""
+    if ident.startswith("toggle:"):
+        return bool(getattr(mw, ident[7:]))
+    if ident == "view:texture":
+        return stage_mod.shows_texture(bpy.context.space_data)
+    return False
+
 
 def draw(ed, side, region):
     """Draw the HUD for one view.  ``ed`` is the running editor."""
@@ -217,8 +229,8 @@ def _dock(ed, region):
                 bg, fg = T.ACCENT, T.TEXT_DARK
             elif hovered:
                 fg = T.TEXT
-        elif ident.startswith("toggle:"):
-            on = getattr(mw, ident[7:])
+        elif ident.startswith("toggle:") or ident.startswith("view:"):
+            on = _is_on(mw, ident)
             if on:
                 fg = T.TEXT
             if hovered:
@@ -231,7 +243,7 @@ def _dock(ed, region):
                 bg, fg = T.CHIP_HOVER, T.TEXT
         if bg is not None:
             paint.rect(a, b, c, d, bg, r)
-        if ident.startswith("toggle:") and getattr(mw, ident[7:]):
+        if _is_on(mw, ident):
             paint.rect((a + c) / 2 - paint.px(8.0), b + paint.px(3.0),
                        (a + c) / 2 + paint.px(8.0), b + paint.px(5.0),
                        T.ACCENT, paint.px(1.0))

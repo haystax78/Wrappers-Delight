@@ -24,6 +24,7 @@ from ..model import pairs as P
 from ..model.properties import RESULT_KEY, redraw_views
 from . import hud, paint, picking, scene_draw
 from . import theme as T
+from . import stage as stage_mod
 from .stage import Stage
 
 UNDO_LIMIT = 64
@@ -349,7 +350,7 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
                 elif event.value == 'RELEASE' and self.state == 'BUTTON':
                     self.state = 'IDLE'
                     if over:
-                        return self._button(context, over)
+                        return self._button(context, over, area)
                 return {'RUNNING_MODAL'}
         if self.state == 'BUTTON' and event.type == 'LEFTMOUSE' and \
                 event.value == 'RELEASE':
@@ -485,7 +486,7 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
 
     # ============================================================== dock ==
 
-    def _button(self, context, ident):
+    def _button(self, context, ident, area=None):
         mw = self.mw
         if ident.startswith("tool:"):
             self.set_tool(ident[5:])
@@ -494,6 +495,11 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
             setattr(mw, attr, not getattr(mw, attr))
             if attr == "link_views" and mw.link_views:
                 self.stage.link.start()
+        elif ident == "view:texture":
+            state = stage_mod.toggle_texture(area)
+            if state is not None:
+                label = T.SIDE_LABEL.get(self.stage.side_of(area), "View")
+                self.say(f"{label.title()} texture {'on' if state else 'off'}")
         elif ident == "help":
             self.show_help = not self.show_help
         elif ident == "finish":

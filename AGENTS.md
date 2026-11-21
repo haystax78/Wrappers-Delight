@@ -19,8 +19,11 @@ curves drawn on both meshes. Result is stored in a `Wrapped` shape key.
   - `graph.py`: mesh adjacency, normals, confidence-weighted field diffusion.
   - `surface.py`: `SurfaceProbe` (zero-copy queries on similarity transforms,
     world BVH from arrays otherwise — never BMesh, targets can be millions of tris).
-  - `conform.py`: iterative conform that smooths the *displacement field*
-    (keeps cage shape), coarse→fine, exact snap + tangential relax.
+  - `conform.py`: staged conform: facing-filtered closest point (+ ray retry,
+    robust outlier drop, neighbour fill), inner pull steps with umbrella
+    smoothing of positions (stiffness annealed, tangential from stage 3 so
+    rows stay evenly spread in creases), then exact snaps with tangential
+    evening-out. Excluded verts ramp back in via `pipeline.exclude_ramp`.
   - `pipeline.py`: `WrapJob` (validates up front, `run()` generator per stage).
 - **operators/** — sidebar ops; `fit.py` runs `WrapJob` modally (live preview, Esc cancels).
 - **editor/** — the two-view curve editor

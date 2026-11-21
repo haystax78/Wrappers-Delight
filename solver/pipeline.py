@@ -21,6 +21,40 @@ MIN_SAMPLES = 3
 
 
 
+def exclude_ramp(graph, X, frozen, landmarks, smooth_passes=8):
+    """How much of the surface fit each vertex receives (0..1), or None.
+
+    0 inside the excluded area (kept as warped), 1 from the nearest
+    landmarks outward, easing in between with a smoothstep of the distance
+    along the mesh.  The width of the transition is, for each stretch of the
+    excluded area's edge, the mesh distance from that edge to its nearest
+    landmark; it is smoothed along the mesh so the ramp has no seams.
+    """
+    frozen = np.asarray(frozen, bool)
+    if not frozen.any() or frozen.all() or not len(landmarks):
+        return None
+    # landmark vertices: the free vertex nearest each matched sample
+    free_idx = np.flatnonzero(~frozen)
+    lm = set()
+    for q in np.asarray(landmarks, float):
+        d = np.einsum('ij,ij->i', X[free_idx] - q, X[free_idx] - q)
+        lm.add(int(free_idx[int(d.argmin())]))
+    d_ex, label = graph.distances(X, np.flatnonzero(frozen))
+    d_lm, _ = graph.distances(X, sorted(lm))
+    # transition width per excluded-edge vertex, carried to every vertex by
+    # its nearest one, then smoothed
+    ok = (label >= 0) & np.isfinite(d_ex)
+    width = np.zeros(len(X))
+    width[ok] = d_lm[label[ok]]
+    width[~np.isfinite(width)] = 0.0
+    sm, _den = graph.blend(width[:, None], ok.astype(float), smooth_passes)
+    width = np.maximum(sm[:, 0], 1e-12)
+    t = np.where(ok, np.clip(d_ex / width, 0.0, 1.0), 1.0)
+    ramp = t * t * (3.0 - 2.0 * t)
+    ramp[frozen] = 0.0
+    return ramp
+
+
 def _samples(cos, count, closed):
     if len(cos) == count:
         return np.array(cos, dtype=float)
@@ -65,9 +99,9 @@ def group_mask(obj, name):
 
 def conform_params(mw, reach):
     if mw.fit_preset == 'CUSTOM':
-        kw = dict(iterations=mw.custom_iterations,
-                  stiffness=mw.custom_stiffness, detail=mw.custom_detail,
-                  relax=mw.custom_relax)
+        kw = conform_mod.custom_params(mw.custom_iterations,
+                                       mw.custom_stiffness, mw.custom_detail,
+                                       mw.custom_relax)
     else:
         kw = dict(conform_mod.PRESETS[mw.fit_preset])
     return conform_mod.ConformParams(reach=reach, **kw)
@@ -161,9 +195,15 @@ class WrapJob:
             if pins:
                 # excluded verts stay as warped even when a landmark is near
                 pins = {i: q for i, q in pins.items() if not frozen[i]}
-            for k, total, X in conform_mod.conform(X, graph, self.probe,
+            X0 = X.copy()
+            ramp = exclude_ramp(graph, X0, frozen, self.dst)
+            for k, total, X in conform_mod.conform(X0, graph, self.probe,
                                                    params, pins=pins,
                                                    frozen=frozen):
+                if ramp is not None:
+                    # ease from the warped shape at the excluded area to the
+                    # full wrap at the nearest landmarks
+                    X = X0 + ramp[:, None] * (X - X0)
                 yield 0.14 + 0.86 * k / total, f"Conforming {k}/{total}", X
         self.result_world = X
         yield 1.0, "Done", X
