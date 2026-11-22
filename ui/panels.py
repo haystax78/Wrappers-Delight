@@ -1,6 +1,6 @@
-"""Sidebar interface (View3D > Sidebar > Mesh Wrap).
+"""Sidebar interface (View3D > Sidebar > Wrapper's Delight).
 
-    Mesh Wrap            pick cage and target, see readiness at a glance
+    Wrapper's Delight    pick cage and target, see readiness at a glance
       Correspondences    the pair list, the active pair, the curve editor
       Fit                preset and options, the Wrap button
       Result             blend slider, bake, remove
@@ -13,7 +13,15 @@ from ..model import legacy
 from ..model import pairs as P
 from ..operators import fit as fit_ops
 
-CATEGORY = "Mesh Wrap"
+ADDON_NAME = "Wrapper's Delight"
+CATEGORY = ADDON_NAME
+
+
+def _version_text():
+    """'1.0' from bl_info (patch shown only when it isn't 0)."""
+    from .. import bl_info
+    v = tuple(bl_info["version"])
+    return ".".join(str(n) for n in (v if len(v) > 2 and v[2] else v[:2]))
 
 
 def _ready(mw):
@@ -58,7 +66,7 @@ class _Panel:
 
 class MESHWRAP_PT_main(_Panel, bpy.types.Panel):
     bl_idname = "MESHWRAP_PT_main"
-    bl_label = "Mesh Wrap"
+    bl_label = f"{ADDON_NAME} {_version_text()}"
 
     def draw_header(self, context):
         self.layout.label(icon='MOD_SHRINKWRAP')

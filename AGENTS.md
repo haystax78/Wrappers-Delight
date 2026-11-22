@@ -1,4 +1,7 @@
-# Mesh Wrap Add-on
+# Wrapper's Delight Add-on
+
+(Package folder and identifiers stay `mesh_wrap` / `meshwrap.*` / `Scene.mesh_wrap`
+so existing files and keymaps keep working.)
 
 ## Overview
 Blender add-on that fits a cage mesh onto a target surface from matching

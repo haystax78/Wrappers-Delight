@@ -1,4 +1,4 @@
-"""Scene data for Mesh Wrap.
+"""Scene data for Wrapper's Delight.
 
 Everything lives on ``Scene.mesh_wrap`` (a :class:`WrapSettings`):
 

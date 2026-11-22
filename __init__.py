@@ -1,4 +1,4 @@
-"""Mesh Wrap: fit a cage mesh onto a target surface from matching curves.
+"""Wrapper's Delight: fit a cage mesh onto a target surface from matching curves.
 
 Draw a curve on the cage and the same feature on the target (eye rims, lip
 line, jaw, ears ...).  Each pair yields evenly spaced matched points; the fit
@@ -15,11 +15,11 @@ Package layout
 """
 
 bl_info = {
-    "name": "Mesh Wrap",
+    "name": "Wrapper's Delight",
     "author": "haystax78",
-    "version": (0, 2, 0),
+    "version": (1, 0, 0),
     "blender": (4, 2, 0),
-    "location": "View3D > Sidebar > Mesh Wrap",
+    "location": "View3D > Sidebar > Wrapper's Delight",
     "description": "Fit a cage mesh onto a target surface from matching "
                    "curves",
     "category": "Mesh",

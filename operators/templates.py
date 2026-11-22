@@ -6,8 +6,8 @@ A template lives in ``<add-on>/templates/<name>/``:
                     materials; their images are packed into the file
     curves.json     the cage half of every pair, plus pair settings
 
-Importing one brings the cage into the open scene, makes it the Mesh Wrap
-cage and recreates the pairs with only their cage half drawn.  The curve
+Importing one brings the cage into the open scene, makes it the
+Wrapper's Delight cage and recreates the pairs with only their cage half drawn.  The curve
 editor then walks through them one by one (see ``editor.session``): each
 pair waits for its target curve and the views frame the next one.
 """
@@ -199,7 +199,7 @@ class MESHWRAP_OT_template_save(bpy.types.Operator):
 
 class MESHWRAP_OT_template_import(bpy.types.Operator):
     """Bring a saved cage template into this scene: the cage with its
-    textured material becomes the Mesh Wrap cage, and its curves wait for
+    textured material becomes the Wrapper's Delight cage, and its curves wait for
     their matching curves on the target"""
     bl_idname = "meshwrap.template_import"
     bl_label = "Import Cage Template"
