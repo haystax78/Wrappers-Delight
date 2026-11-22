@@ -225,3 +225,7 @@ __marimo__/
 # local sync / OS clutter
 .DS_Store
 *.ffs_db
+
+# saved cage templates (large .blend files) stay local
+templates/*
+!templates/.gitkeep
