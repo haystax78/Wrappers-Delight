@@ -33,12 +33,21 @@ curves drawn on both meshes. Result is stored in a `Wrapped` shape key.
   - `pipeline.py`: `WrapJob` (validates up front, `run()` generator per stage).
 - **operators/** — sidebar ops; `fit.py` runs `WrapJob` modally (live preview, Esc cancels).
   `pairs.py` has `meshwrap.pair_pick` (eyedropper: click a curve in any 3D view).
+  `templates.py`: save/import cage templates in `templates/<name>/`
+  (`<name>.blend` = cage on its rest shape with materials, images packed;
+  `curves.json` = cage halves + pair settings). Import makes it the cage and
+  recreates the pairs cage-side only.
 - **editor/** — the two-view curve editor
   - `stage.py`: new window or split view, local views, chrome hiding, camera link.
   - `session.py`: modal operator (`meshwrap.editor`), Draw/Edit tools, private undo.
   - Draw tool: drag = freehand, click = place points (live Catmull-Rom, drag
     placed points), then PREVIEW with a point-count dial (wheel/arrows/digits,
     also resamples the waiting half) before LMB confirms. One half ahead only.
+  - `guide.py`: pairs waiting for a target curve (template import) are
+    walked in list order: next one made active, cage view framed on its
+    curve, target view on the matching spot (similarity from finished pairs,
+    camera link before that); new target curves are oriented like the cage
+    curve; with X symmetry a waiting mirror twin gets the mirrored curve.
   - `picking.py`, `scene_draw.py` (2D screen-space curves through the stored
     points, per-point raycast occlusion; geometry cached per view, GPU batches
     per half cached per view + style), `symmetry.py` (X=0 slice line, cached

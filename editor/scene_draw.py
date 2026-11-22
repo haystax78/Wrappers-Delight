@@ -33,10 +33,13 @@ _GEN = [0]
 
 
 class DrawOptions:
-    __slots__ = ("controls", "xray", "hover", "dim_others", "active_uid")
+    __slots__ = ("controls", "xray", "hover", "dim_others", "active_uid",
+                 "only", "focus")
 
     def __init__(self, controls=False, xray=False, hover=None,
-                 dim_others=False, active_uid=None):
+                 dim_others=False, active_uid=None, only=None, focus=None):
+        self.only = only              # set of pair uids to draw (None: all)
+        self.focus = focus            # uids kept in colour; others grey
         self.controls = controls      # editing: show points larger
         self.xray = xray              # faint pass for occluded parts
         self.hover = hover            # (uid, point index) under the mouse
@@ -149,10 +152,10 @@ def _matrix_key(obj):
 
 # -------------------------------------------------------------------- draw --
 
-def _halves(mw, side, obj, region, rv3d):
+def _halves(mw, side, obj, region, rv3d, only=None):
     items = []
     for pair in mw.pairs:
-        if pair.hidden:
+        if pair.hidden or (only is not None and pair.uid not in only):
             continue
         cos = P.coords(pair, side)
         if not cos:
@@ -184,11 +187,12 @@ def draw_side(mw, side, obj, region, rv3d, opts):
     """Draw every visible pair's ``side`` half in this region."""
     if obj is None or region is None or rv3d is None:
         return
-    gen, halves = _halves(mw, side, obj, region, rv3d)
+    gen, halves = _halves(mw, side, obj, region, rv3d, opts.only)
     if not halves:
         return
     style = (opts.active_uid, opts.hover, bool(opts.xray), bool(opts.controls),
-             bool(opts.dim_others), paint.px(1.0))
+             bool(opts.dim_others), paint.px(1.0),
+             tuple(sorted(opts.focus)) if opts.focus else None)
     slot = (region.as_pointer(), side)
     hit = _BATCHES.get(slot)
     if hit is None or hit[0] != (gen, style):
@@ -202,7 +206,77 @@ def draw_side(mw, side, obj, region, rv3d, opts):
     _issue(hit[1])
 
 
+ARROW_GAP_PX = 110.0      # spacing of direction arrowheads along a curve
+ARROW_LEN_PX = 15.0
+ARROW_HALF_W_PX = 8.5
+
+
+def _arrow_tris(run, gap, length, half_w):
+    """Arrowhead triangles along screen polyline ``run``: evenly spaced
+    (at least one), plus one at the very end, all pointing along it."""
+    pts = np.asarray(run, float)
+    seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    total = float(seg.sum())
+    if total < length * 1.5:
+        return []
+    cum = np.concatenate([[0.0], np.cumsum(seg)])
+    count = max(1, int(total // gap))
+    marks = [total * (k + 0.5) / count for k in range(count)]
+    marks.append(total - 0.5 * length)     # the head of the curve
+    tris = []
+    for s in marks:
+        i = min(int(np.searchsorted(cum, s, side='right')) - 1, len(seg) - 1)
+        while i < len(seg) - 1 and seg[i] < 1e-6:
+            i += 1
+        if seg[i] < 1e-6:
+            continue
+        t = (s - cum[i]) / seg[i]
+        p = pts[i] + t * (pts[i + 1] - pts[i])
+        d = (pts[i + 1] - pts[i]) / seg[i]
+        n = np.array([-d[1], d[0]])
+        tip = p + d * (0.5 * length)
+        base = p - d * (0.5 * length)
+        tris.append((tuple(tip), tuple(base + n * half_w),
+                     tuple(base - n * half_w)))
+    return tris
+
+
+def draw_arrows(mw, side, obj, region, rv3d, uid, color):
+    """Arrowheads showing which way pair ``uid``'s ``side`` curve runs."""
+    if obj is None or region is None or rv3d is None:
+        return
+    # same item set as draw_side, so its cached screen geometry is reused
+    _gen, halves = _halves(mw, side, obj, region, rv3d)
+    h = next((h for h in halves if h.uid == uid), None)
+    if h is None:
+        return
+    out_tris, fill_tris = [], []
+    for run, visible in h.runs:
+        grow = paint.px(2.0)
+        for tri in _arrow_tris(run, paint.px(ARROW_GAP_PX),
+                               paint.px(ARROW_LEN_PX),
+                               paint.px(ARROW_HALF_W_PX)):
+            V = np.asarray(tri)
+            c = V.mean(axis=0)
+            r = np.maximum(np.linalg.norm(V - c, axis=1, keepdims=True), 1e-6)
+            big = [tuple(v) for v in c + (V - c) * (1.0 + grow / r)]
+            a = 1.0 if visible else 0.35
+            out_tris.append((big, a))
+            fill_tris.append((tri, a))
+    if not fill_tris:
+        return
+    gpu.state.blend_set('ALPHA')
+    for tri, a in out_tris:
+        paint._fill(list(tri), paint.with_alpha(OUTLINE, OUTLINE[3] * a))
+    fill = paint.mix((color[0], color[1], color[2], 1.0), WHITE, 0.55)
+    for tri, a in fill_tris:
+        paint._fill(list(tri), paint.with_alpha(fill, a))
+    gpu.state.blend_set('NONE')
+
+
 WHITE = (1.0, 1.0, 1.0, 1.0)
+GREY = (0.62, 0.62, 0.64, 1.0)
+GREY_ALPHA = 0.75
 DOT_SEGS = 14
 
 
@@ -221,6 +295,10 @@ def _build_half(h, opts):
     elif opts.dim_others and opts.active_uid is not None and not active:
         alpha = 0.55
     base = h.color + (1.0,)
+    if opts.focus and h.uid not in opts.focus:
+        # stepping through a template: the other curves stay as grey context
+        base = GREY
+        alpha *= GREY_ALPHA
     width = paint.px(4.0 if active else 2.5)
     out = []
 

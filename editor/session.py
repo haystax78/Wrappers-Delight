@@ -22,7 +22,7 @@ from .. import preferences
 from ..model import display, sampling
 from ..model import pairs as P
 from ..model.properties import RESULT_KEY, redraw_views
-from . import hud, paint, picking, scene_draw, symmetry
+from . import guide, hud, paint, picking, scene_draw, symmetry
 from . import theme as T
 from . import stage as stage_mod
 from .stage import Stage
@@ -36,6 +36,7 @@ STROKE_SAMPLE_PX = 4.0       # screen spacing of freehand samples
 STROKE_MAX_SAMPLES = 4000
 DRAG_THRESHOLD_PX = 6.0      # press-and-move beyond this = freehand stroke
 PICK_PX = 14.0
+GUIDE_START_DELAY = 0.6      # s: let the views settle before framing
 _DIAL_UP = {'WHEELUPMOUSE', 'WHEELINMOUSE', 'UP_ARROW', 'RIGHT_ARROW',
             'PAGE_UP', 'NUMPAD_PLUS', 'EQUAL', 'PLUS'}
 _DIAL_DOWN = {'WHEELDOWNMOUSE', 'WHEELOUTMOUSE', 'DOWN_ARROW', 'LEFT_ARROW',
@@ -204,6 +205,9 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
         self.point_count = CURVE_MIN
         self.typed = ""
         self.pending_raw = None  # stroke behind the half waiting for a match
+        self.guide_uids = set()  # template pairs this session steps through
+        self.guide_history = []  # finished template pairs, for Back
+        self._guide_start_at = None
         self.press_xy = None
         self.drag = None
         self.dirty = False
@@ -238,9 +242,89 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
         _RUNNING = self
         _STOP = False
         display.invalidate_all()
+        # template curves waiting for the target: step through them
+        # (framed once the views have settled: local view animates them and
+        # the first redraw may swap them, see Stage.tidy)
+        self.guide_uids = {p.uid for p in guide.waiting(mw)}
+        self._guide_start_at = (time.monotonic() + GUIDE_START_DELAY
+                                if self.guide_uids else None)
         self.stage.redraw()
         redraw_views()
         return {'RUNNING_MODAL'}
+
+    # ------------------------------------------------------------- guide --
+
+    def guide_progress(self):
+        """'k of N' for the template pairs this session is walking through."""
+        mw = self.mw
+        total = sum(1 for p in mw.pairs if p.uid in self.guide_uids)
+        done = sum(1 for p in mw.pairs
+                   if p.uid in self.guide_uids and P.is_complete(p))
+        return f"{min(done + 1, total)} of {total}"
+
+    def shown_uids(self):
+        """While template curves are still waiting for their match, only
+        the one being placed is shown (and can be hovered); None = all."""
+        if not self.guide_uids:
+            return None
+        pending = self.pending_pair()
+        if pending is None or pending.uid not in self.guide_uids:
+            return None
+        return {pending.uid}
+
+    def guide_back(self):
+        """Reopen the last template curve placed (and the mirror filled in
+        with it) so it can be drawn again, and frame it."""
+        mw = self.mw
+        if self.state != 'IDLE':
+            self.stroke = []
+            self.preview = []
+            self.pt_drag = self.pt_hover = None
+            self.state = 'IDLE'
+        while self.guide_history:
+            entry = self.guide_history.pop()
+            pair = P.by_uid(mw, entry['uid'])
+            if pair is not None and P.has_side(pair, 'TARGET'):
+                break
+        else:
+            self.say("No earlier template curve to go back to")
+            return
+        self.push_undo()
+        P.set_coords(pair, 'TARGET', [])
+        twin = P.by_uid(mw, entry['twin']) if entry['twin'] else None
+        if twin is not None:
+            P.set_coords(twin, 'TARGET', [])
+        made = P.by_uid(mw, entry['made']) if entry['made'] else None
+        if made is not None:
+            P.remove(mw, P.index_of_uid(mw, made.uid))
+        self.pending_raw = None
+        mw.pair_index = P.index_of_uid(mw, pair.uid)
+        try:
+            guide.frame_pair(self, pair)
+        except (RuntimeError, ValueError, ReferenceError):
+            traceback.print_exc()
+        self.changed()
+        self.say(f"Back to '{pair.name}': draw it again on the target  "
+                 f"({self.guide_progress()})")
+
+    def _guide_next(self):
+        """Make the next waiting template pair active and frame it."""
+        if not self.guide_uids:
+            return None
+        pending = self.pending_pair()
+        if pending is not None and P.missing_side(pending) != 'TARGET':
+            return None              # the artist is mid-way through a pair
+        left = [p for p in guide.waiting(self.mw)
+                if p.uid in self.guide_uids]
+        if not left:
+            return None
+        pair = pending if pending in left else left[0]
+        self.mw.pair_index = P.index_of_uid(self.mw, pair.uid)
+        try:
+            guide.frame_pair(self, pair)
+        except (RuntimeError, ValueError, ReferenceError):
+            traceback.print_exc()
+        return pair
 
     @property
     def mw(self):
@@ -311,6 +395,13 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
 
         if event.type == 'TIMER':
             self.stage.tidy(context, mw.cage, mw.target)
+            if self._guide_start_at is not None and \
+                    time.monotonic() >= self._guide_start_at:
+                self._guide_start_at = None
+                nxt = self._guide_next()
+                if nxt is not None:
+                    self.say(f"Template: draw '{nxt.name}' on the target  "
+                             f"({self.guide_progress()})")
             if self.toast[0] and time.monotonic() - self.toast[1] < 2.0:
                 self.stage.redraw()
             return {'PASS_THROUGH'}
@@ -340,11 +431,13 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
 
         # --- dock ---------------------------------------------------------
         if region is not None and self.state in ('IDLE', 'BUTTON'):
-            over = hud.dock_hit(region, view[3])
+            extra = self.dock_extra()
+            over = hud.dock_hit(region, view[3], extra)
             if over != self.hover_button:
                 self.hover_button = over
                 self.stage.redraw()
-            if event.type == 'LEFTMOUSE' and hud.over_ui(region, view[3]):
+            if event.type == 'LEFTMOUSE' and hud.over_ui(region, view[3],
+                                                          extra):
                 if event.value == 'PRESS':
                     self.state = 'BUTTON'
                 elif event.value == 'RELEASE' and self.state == 'BUTTON':
@@ -471,6 +564,12 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
                         "arrows / type a number  ·  LMB confirm  ·  RMB "
                         "cancel")
             pending = self.pending_pair()
+            if pending is not None and pending.uid in self.guide_uids:
+                back = ("  ·  Back reopens the previous one"
+                        if self.guide_history else "")
+                return (f"Template {self.guide_progress()}: trace "
+                        f"'{pending.name}' on the target, the same feature "
+                        f"as on the cage{back}")
             if pending is not None:
                 return (f"Draw the matching curve for '{pending.name}' on "
                         f"the {P.missing_side(pending).lower()} mesh "
@@ -486,9 +585,15 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
 
     # ============================================================== dock ==
 
+    def dock_extra(self):
+        """Extra dock chips for the current state."""
+        return hud.GUIDE if self.guide_history else ()
+
     def _button(self, context, ident, area=None):
         mw = self.mw
-        if ident.startswith("tool:"):
+        if ident == "guide:back":
+            self.guide_back()
+        elif ident.startswith("tool:"):
             self.set_tool(ident[5:])
         elif ident.startswith("toggle:"):
             attr = ident[7:]
@@ -971,8 +1076,13 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
             self.stroke = []
             return
         side = self.stroke_side
-        local = [tuple(h.local) for h in hits]
         pending = self.pending_pair()
+        guided = (pending is not None and pending.uid in self.guide_uids
+                  and side == 'TARGET' and P.missing_side(pending) == side)
+        if guided:
+            # template curves: run the same way as the cage curve
+            hits = guide.orient(self, pending, hits)
+        local = [tuple(h.local) for h in hits]
         if pending is not None and P.missing_side(pending) == side:
             pair = pending
             P.set_coords(pair, side, local)
@@ -981,11 +1091,29 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
             self.pending_raw = None
             msg = (f"Matched '{pair.name}' ({len(local)} points) - draw next "
                    "curve on either mesh")
-            if mw.symmetry:
+            twin = made = None
+            if mw.symmetry and guided:
+                twin = guide.fill_mirror_twin(self, pair)
+                if twin is not None:
+                    msg = (f"Matched '{pair.name}' + its mirror "
+                           f"'{twin.name}'")
+            if mw.symmetry and twin is None:
                 made = self._mirror_completed(pair)
                 if made is not None:
                     msg = (f"Matched '{pair.name}' ({len(local)} points) + "
                            f"mirrored as '{made.name}' - draw next curve")
+            if guided:
+                self.guide_history.append({
+                    'uid': pair.uid,
+                    'twin': twin.uid if twin is not None else None,
+                    'made': made.uid if made is not None else None})
+                nxt = self._guide_next()
+                if nxt is not None:
+                    msg = (f"{msg.split(' - ')[0]} - now draw '{nxt.name}' "
+                           f"on the target ({self.guide_progress()})")
+                else:
+                    msg = (f"{msg.split(' - ')[0]} - all template curves "
+                           "placed")
         else:
             pair = P.new_pair(mw)
             pair.samples = len(local)
@@ -1087,10 +1215,13 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
 
     def _visible_halves(self, side):
         dg = self.depsgraph()
+        only = self.shown_uids()
         for s in self.view_sides(side):
             obj = P.obj_for(self.mw, s)
             for pair in self.mw.pairs:
                 if pair.hidden or not P.has_side(pair, s):
+                    continue
+                if only is not None and pair.uid not in only:
                     continue
                 geo = display.half(obj, dg, pair, s)
                 if geo is not None:
@@ -1424,9 +1555,16 @@ def _draw_curves(op, side, region, rv3d):
     opts = scene_draw.DrawOptions(
         controls=op.tool == 'EDIT', xray=mw.xray, hover=hover,
         dim_others=op.tool == 'EDIT',
-        active_uid=active.uid if active else None)
+        active_uid=active.uid if active else None,
+        focus=op.shown_uids())
     for s in op.view_sides(side):
         scene_draw.draw_side(mw, s, P.obj_for(mw, s), region, rv3d, opts)
+    if opts.focus:
+        # placing a template curve: show which way it runs
+        pair = P.by_uid(mw, next(iter(opts.focus)))
+        if pair is not None and 'CAGE' in op.view_sides(side):
+            scene_draw.draw_arrows(mw, 'CAGE', mw.cage, region, rv3d,
+                                   pair.uid, tuple(pair.color))
     if op.tool == 'DRAW':
         _draw_live(op, side, region, rv3d)
 

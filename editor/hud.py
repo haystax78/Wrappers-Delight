@@ -67,15 +67,21 @@ SHORTCUTS = (
 
 # ------------------------------------------------------------------ layout --
 
-def dock_layout(region):
-    """[(id, label, (x0, y0, x1, y1))] for the dock in this region."""
+GUIDE = (("guide:back", "Back"),)
+
+
+def dock_layout(region, extra=()):
+    """[(id, label, (x0, y0, x1, y1))] for the dock in this region.
+    ``extra`` is a leading group shown only in some states (template
+    stepping: Back)."""
     h = paint.px(T.DOCK_H)
     pad = paint.px(T.DOCK_PAD)
     gap = paint.px(T.CHIP_GAP)
     group_gap = paint.px(T.GROUP_GAP)
     chips = []
     x = 0.0
-    for gi, group in enumerate((TOOLS, TOGGLES, ACTIONS)):
+    groups = ((tuple(extra),) if extra else ()) + (TOOLS, TOGGLES, ACTIONS)
+    for gi, group in enumerate(groups):
         if gi:
             x += group_gap
         for k, (ident, label) in enumerate(group):
@@ -92,16 +98,16 @@ def dock_layout(region):
             for ident, label, cx, w in chips]
 
 
-def dock_hit(region, xy):
-    for ident, _label, (x0, y0, x1, y1) in dock_layout(region):
+def dock_hit(region, xy, extra=()):
+    for ident, _label, (x0, y0, x1, y1) in dock_layout(region, extra):
         if x0 <= xy[0] <= x1 and y0 <= xy[1] <= y1:
             return ident
     return None
 
 
-def over_ui(region, xy):
+def over_ui(region, xy, extra=()):
     """True when ``xy`` lies on the dock (clicks there aren't for the mesh)."""
-    items = dock_layout(region)
+    items = dock_layout(region, extra)
     if not items:
         return False
     pad = paint.px(T.DOCK_PAD)
@@ -212,7 +218,7 @@ def _prompt(ed, region, side):
 
 
 def _dock(ed, region):
-    items = dock_layout(region)
+    items = dock_layout(region, ed.dock_extra())
     if not items:
         return
     pad = paint.px(T.DOCK_PAD)
@@ -242,6 +248,9 @@ def _dock(ed, region):
         elif ident == "finish":
             bg = T.ON if hovered else T.CHIP
             fg = T.TEXT_DARK if hovered else T.TEXT
+        elif ident == "guide:back":
+            bg = T.CHIP_HOVER if hovered else T.CHIP
+            fg = T.TEXT
         elif ident == "help":
             if ed.show_help:
                 bg, fg = T.CHIP_HOVER, T.TEXT

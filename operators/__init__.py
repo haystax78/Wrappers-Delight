@@ -2,9 +2,9 @@
 
 import bpy
 
-from . import fit, pairs
+from . import fit, pairs, templates
 
-CLASSES = pairs.CLASSES + fit.CLASSES
+CLASSES = pairs.CLASSES + fit.CLASSES + templates.CLASSES
 
 
 def register():

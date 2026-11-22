@@ -72,6 +72,11 @@ class MESHWRAP_PT_main(_Panel, bpy.types.Panel):
         col = layout.column(align=True)
         col.prop(mw, "cage", icon='MESH_ICOSPHERE')
         col.prop(mw, "target", icon='MESH_MONKEY')
+        row = layout.row(align=True)
+        row.operator("meshwrap.template_import", text="Import Template",
+                     icon='IMPORT')
+        row.operator("meshwrap.template_save", text="Save Template",
+                     icon='EXPORT')
 
         if legacy.has_legacy(mw):
             box = layout.box()
