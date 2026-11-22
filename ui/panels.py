@@ -28,6 +28,25 @@ def _ready(mw):
     return mw.cage is not None and mw.target is not None
 
 
+def _update_notice(layout):
+    """Small notice under the title when a newer release is out (or one is
+    downloading / installed).  Blender can't colour panel text, so the
+    green comes from the icon."""
+    from .. import updater
+    st = updater.state
+    status = st["status"]
+    if status == "AVAILABLE":
+        row = layout.row()
+        row.scale_y = 0.85
+        row.operator("meshwrap.update_install", emboss=False,
+                     text=f"{st['message']}  ·  click to install",
+                     icon='STRIP_COLOR_04')
+    elif status in {"DOWNLOADING", "INSTALLED"}:
+        row = layout.row()
+        row.scale_y = 0.85
+        row.label(text=st["message"], icon='STRIP_COLOR_04')
+
+
 class MESHWRAP_UL_pairs(bpy.types.UIList):
     bl_idname = "MESHWRAP_UL_pairs"
 
@@ -74,6 +93,7 @@ class MESHWRAP_PT_main(_Panel, bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         mw = context.scene.mesh_wrap
+        _update_notice(layout)
         layout.use_property_split = True
         layout.use_property_decorate = False
 

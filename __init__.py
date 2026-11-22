@@ -28,10 +28,10 @@ bl_info = {
 import bpy
 from bpy.app.handlers import persistent
 
-from . import editor, operators, preferences, ui
+from . import editor, operators, preferences, ui, updater
 from .model import display, properties
 
-_MODULES = (properties, preferences, operators, editor, ui)
+_MODULES = (properties, preferences, operators, editor, ui, updater)
 
 
 @persistent

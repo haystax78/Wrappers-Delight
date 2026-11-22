@@ -19,13 +19,39 @@ class MeshWrapPreferences(bpy.types.AddonPreferences):
         ],
         default='WINDOW',
     )
+    auto_update: bpy.props.BoolProperty(
+        name="Check for Updates",
+        default=True,
+        description="When Blender starts, look for a newer release on "
+                    "GitHub and offer to install it from the sidebar "
+                    "(needs Allow Online Access in Preferences > System)",
+    )
 
     def draw(self, context):
-        self.layout.prop(self, "editor_layout")
+        from . import updater
+        layout = self.layout
+        layout.prop(self, "editor_layout")
+        box = layout.box()
+        row = box.row()
+        row.prop(self, "auto_update")
+        row.operator("meshwrap.update_check", icon='FILE_REFRESH')
+        st = updater.state
+        if st["message"]:
+            row = box.row()
+            if st["status"] == "AVAILABLE":
+                row.operator("meshwrap.update_install", text=st["message"],
+                             icon='IMPORT')
+            else:
+                row.label(text=st["message"],
+                          icon='ERROR' if st["status"] in {"ERROR", "OFFLINE"}
+                          else 'INFO')
+        box.label(text=f"Installed: {updater.version_text(updater.installed_version())}"
+                       f"  ·  Releases: {updater.RELEASES_PAGE}")
 
 
 class _Defaults:
     editor_layout = 'WINDOW'
+    auto_update = True
 
 
 def get():

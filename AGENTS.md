@@ -56,6 +56,10 @@ curves drawn on both meshes. Result is stored in a `Wrapped` shape key.
     per half cached per view + style), `symmetry.py` (X=0 slice line, cached
     batch, depth-biased), `hud.py` (2D),
     `paint.py`, `theme.py`.
+- `updater.py` — GitHub release check (background thread, once per session,
+  pref `auto_update`, respects `bpy.app.online_access`) and in-place install
+  (keeps `templates/`, refuses a git checkout). Worker threads only touch the
+  `state` dict; a main-thread timer repaints.
 - **ui/** — `panels.py` (sidebar: Mesh Wrap > Correspondences / Fit / Result), `overlay.py`.
 
 ## Verification
