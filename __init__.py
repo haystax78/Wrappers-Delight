@@ -17,7 +17,7 @@ Package layout
 bl_info = {
     "name": "Wrapper's Delight",
     "author": "haystax78",
-    "version": (1, 0, 0),
+    "version": (1, 0, 1),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Wrapper's Delight",
     "description": "Fit a cage mesh onto a target surface from matching "

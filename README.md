@@ -1,4 +1,4 @@
-# Wrapper's Delight 1.0
+# Wrapper's Delight
 
 Wrap a clean cage mesh onto any scan or sculpt by drawing matching curves on both. Wrapper's Delight aligns the cage to your curves, warps it smoothly through them and conforms it to the target surface. The result goes into a `Wrapped` shape key, so the original shape is always one slider away.
 
@@ -71,7 +71,7 @@ Wrap a clean cage mesh onto any scan or sculpt by drawing matching curves on bot
 
 ## Installation
 
-1. Download **wrappers_delight_1.0.zip** from this release's assets. It contains the `wrappers_delight` folder.
+1. Download the **wrappers_delight** zip from the [latest release](https://github.com/haystax78/Wrappers-Delight/releases/latest). It contains the `wrappers_delight` folder.
 2. In Blender: **Edit › Preferences › Add-ons › Install from Disk…**, then choose the zip.
 3. Enable **Wrapper's Delight**. The panel is in the 3D Viewport sidebar (**N**), under the **Wrapper's Delight** tab.
 
@@ -79,3 +79,14 @@ Wrap a clean cage mesh onto any scan or sculpt by drawing matching curves on bot
 
 - Files made with earlier development builds open as before: the scene data and operator names are unchanged. Older landmark data can be converted with **Convert Old Landmarks** in the sidebar.
 - Saved templates can be large, because the texture is packed into the template's `.blend` file.
+
+## Changelog
+
+### 1.0.1
+
+- **Undo and redo while drawing.** Ctrl+Z and Ctrl+Shift+Z (or Ctrl+Y) now work while you place points and in the point-count preview. They step through placed, moved and removed points, and from the preview back to placing points. Undoing the last point removes the stroke, and redo brings it back.
+- **Point count keeps the matching curve's shape.** Changing the point count while drawing a matching curve no longer distorts the curve already on the other mesh, including after accepting a curve, undoing and drawing it again. Going back to the original count restores the exact original points, and cancelling puts the curve back as it was.
+
+### 1.0
+
+- First release.
