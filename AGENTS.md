@@ -1,7 +1,9 @@
 # Wrapper's Delight Add-on
 
-(Package folder and identifiers stay `mesh_wrap` / `meshwrap.*` / `Scene.mesh_wrap`
-so existing files and keymaps keep working.)
+(Release zips package the add-on as `wrappers_delight/`; nothing depends on the
+folder name. Identifiers stay `meshwrap.*` / `Scene.mesh_wrap` so existing files
+and keymaps keep working. Build a release zip with
+`git archive --format=zip --prefix=wrappers_delight/ -o wrappers_delight_X.Y.zip HEAD -- . ':!.gitignore' ':!AGENTS.md'`.)
 
 ## Overview
 Blender add-on that fits a cage mesh onto a target surface from matching

@@ -71,7 +71,7 @@ Wrap a clean cage mesh onto any scan or sculpt by drawing matching curves on bot
 
 ## Installation
 
-1. Download **wrappers_delight_1.0.zip** from this release's assets. It contains the `mesh_wrap` folder.
+1. Download **wrappers_delight_1.0.zip** from this release's assets. It contains the `wrappers_delight` folder.
 2. In Blender: **Edit › Preferences › Add-ons › Install from Disk…**, then choose the zip.
 3. Enable **Wrapper's Delight**. The panel is in the 3D Viewport sidebar (**N**), under the **Wrapper's Delight** tab.
 
