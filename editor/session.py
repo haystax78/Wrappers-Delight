@@ -207,6 +207,11 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
         self.pending_raw = None  # stroke behind the half waiting for a match
         self.guide_uids = set()  # template pairs this session steps through
         self.guide_history = []  # finished template pairs, for Back
+        self.pt_undo = []        # stroke states before each point edit
+        self.pt_redo = []
+        self.undone_stroke = None  # stroke removed by undo, for redo
+        self.wait_src = None     # (uid, side, points, samples) of the waiting
+        #                          half when the preview opened
         self._guide_start_at = None
         self.press_xy = None
         self.drag = None
@@ -525,6 +530,95 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
         self.undo_stack.append(P.snapshot(self.mw))
         del self.undo_stack[:-UNDO_LIMIT]
         self.redo_stack.clear()
+        # a new scene step: the stroke-level history starts over
+        self.pt_undo = []
+        self.pt_redo = []
+        self.undone_stroke = None
+        self.wait_src = None
+
+    # --- undo / redo inside a stroke (placing points, the preview) ---
+    #
+    # While a curve is being drawn the scene hasn't changed yet, so Ctrl+Z /
+    # Ctrl+Shift+Z step through the stroke itself: placed, moved or removed
+    # points, and the preview back to point placing.  Undoing the last point
+    # drops the stroke (and the scene step taken when it started); redo
+    # right after brings it back.
+
+    def _pt_record(self):
+        self.pt_undo.append(list(self.stroke))
+        del self.pt_undo[:-UNDO_LIMIT]
+        self.pt_redo.clear()
+
+    def _abandon_stroke(self, msg):
+        self.undone_stroke = {
+            'side': self.stroke_side, 'kind': self.kind,
+            'closed': self.stroke_closed, 'stroke': list(self.stroke),
+            'redo': list(self.pt_redo), 'count': self.point_count,
+            'preview': self.state == 'PREVIEW'}
+        self.wait_src = None             # the snapshot below covers it
+        if self.undo_stack:
+            # the step taken at stroke start; if the preview resampled the
+            # waiting half meanwhile, that is put back too
+            start = self.undo_stack.pop()
+            if start != P.snapshot(self.mw):
+                P.restore(self.mw, start)
+                self.pending_raw = None
+                self.changed()
+        self.stroke = []
+        self.preview = []
+        self.pt_drag = self.pt_hover = None
+        self.state = 'IDLE'
+        self.say(msg)
+
+    def _stroke_undo(self):
+        self.pt_drag = self.pt_hover = None
+        if self.state == 'PREVIEW':
+            if self.kind == 'POINTS':
+                self.pt_redo.append('PREVIEW')
+                self._restore_wait_source()
+                self.preview = []
+                self.state = 'POINTS'
+                self.say("Undo: back to placing points")
+            else:
+                self._abandon_stroke("Undo: curve removed")
+            return
+        self.pt_redo.append(list(self.stroke))
+        self.stroke = self.pt_undo.pop() if self.pt_undo else []
+        if self.stroke:
+            self.say("Undo point")
+        else:
+            self._abandon_stroke("Undo: curve removed")
+
+    def _stroke_redo(self):
+        """Redo inside a stroke, or bring back the one just undone.
+        Returns False when there was nothing to redo here."""
+        if self.state == 'POINTS':
+            if not self.pt_redo:
+                return False
+            top = self.pt_redo.pop()
+            if top == 'PREVIEW':
+                self._finish_points()
+                return True
+            self.pt_undo.append(list(self.stroke))
+            self.stroke = top
+            self.say("Redo point")
+            return True
+        u = self.undone_stroke
+        if self.state != 'IDLE' or u is None:
+            return False
+        self.push_undo()
+        self.stroke_side, self.kind = u['side'], u['kind']
+        self.stroke_closed = u['closed']
+        self.typed = ""
+        if u['kind'] == 'POINTS' and u['redo']:
+            self.pt_redo = u['redo']
+            self.stroke = self.pt_redo.pop()
+            self.state = 'POINTS'
+            self.say("Redo: curve back")
+        elif u['stroke']:
+            self.stroke = u['stroke']
+            self._enter_preview(u['count'])
+        return True
 
     def undo(self):
         if not self.undo_stack:
@@ -558,7 +652,7 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
             if st == 'POINTS':
                 return (f"{len(self.stroke)} points placed  ·  click to add "
                         "more  ·  drag a point to move it  ·  Enter / RMB to "
-                        "finish  ·  Backspace to undo")
+                        "finish  ·  Ctrl+Z / Ctrl+Shift+Z undo / redo")
             if st == 'PREVIEW':
                 return (f"Points: {self.point_count}  ·  scroll wheel / "
                         "arrows / type a number  ·  LMB confirm  ·  RMB "
@@ -738,6 +832,8 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
             if self.pt_drag is not None:
                 if t == 'LEFTMOUSE' and v == 'RELEASE':
                     self.pt_drag = None
+                    if self.pt_undo and self.pt_undo[-1] == self.stroke:
+                        self.pt_undo.pop()       # clicked without moving
                     self.pt_hover = (
                         self._stroke_pt_hover(view)
                         if side in self.view_sides_of(self.stroke_side)
@@ -750,9 +846,10 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
             if t == 'BACK_SPACE' and v == 'PRESS':
                 self.pt_hover = None
                 if self.stroke:
-                    self.stroke.pop()
+                    self._pt_record()
+                    self.stroke = self.stroke[:-1]
                 if not self.stroke:
-                    self.state = 'IDLE'
+                    self._abandon_stroke("Removed the last point")
                 self.stage.redraw()
                 return {'RUNNING_MODAL'}
             return {'RUNNING_MODAL'} if mouse_btn else None
@@ -787,6 +884,7 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
         return False
 
     def _cancel_stroke(self):
+        self._restore_wait_source()
         self.stroke = []
         self.preview = []
         self.pt_drag = self.pt_hover = None
@@ -904,6 +1002,7 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
             return
         grab = self._stroke_pt_hover(view)
         if grab is not None:
+            self._pt_record()
             self.pt_drag = self.pt_hover = grab
             self.cursor = None
             self.say(f"Moving point {grab + 1} — release to drop")
@@ -912,7 +1011,11 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
             hit = picking.surface_hit(self._stroke_obj(), self.depsgraph(),
                                       region, rv3d, xy, self.mw.snap_vertices)
             if hit is not None:
+                before = len(self.stroke)
+                self._pt_record()
                 self._append_stroke_pt(hit)
+                if len(self.stroke) == before:      # rejected: no step
+                    self.pt_undo.pop()
         self.cursor = self._stroke_cursor(view)
         self.stage.redraw()
 
@@ -996,7 +1099,11 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
     def _enter_preview(self, count):
         pending = self.pending_pair()
         if pending is not None:
-            count = len(P.coords(pending, P.other(self.stroke_side)))
+            other = P.other(self.stroke_side)
+            count = len(P.coords(pending, other))
+            if self._wait_source(pending, other) is None:
+                self.wait_src = (pending.uid, other,
+                                 P.coords(pending, other), pending.samples)
         self.point_count = max(CURVE_MIN, min(CURVE_MAX, int(count)))
         self.typed = ""
         self._build_preview()
@@ -1051,18 +1158,50 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
         side = P.other(self.stroke_side)
         obj = P.obj_for(self.mw, side)
         raw = self.pending_raw
+        src = self._wait_source(pair, side)
         if raw is not None and raw['uid'] == pair.uid and raw['side'] == side:
             world, kind, closed = raw['world'], raw['kind'], raw['closed']
+        elif src is not None:
+            if self.point_count == len(src):
+                # back at the original count: the original points, exactly
+                P.set_coords(pair, side, src)
+                P.set_samples_quietly(pair, len(src))
+                self.changed(pair.uid)
+                return
+            # always from the curve as it was when this preview opened, the
+            # same way the editor spaces clicked points (Catmull-Rom through
+            # them), so repeated changes never wear the shape down
+            world = picking.to_world(obj, src)
+            kind, closed = 'POINTS', bool(pair.closed and len(src) > 2)
         else:
-            world = picking.to_world(obj, P.coords(pair, side))
-            kind, closed = 'FREE', False
+            return
         if len(world) < 2:
             return
         pts = sampling.resample_stroke(np.asarray(world, float), kind, closed,
                                        self.point_count)
         hits = self._project_world(obj, pts)
         P.set_coords(pair, side, [tuple(h.local) for h in hits])
-        pair.samples = self.point_count
+        P.set_samples_quietly(pair, self.point_count)
+        self.changed(pair.uid)
+
+    def _wait_source(self, pair, side):
+        """The waiting half's points as they were when the preview opened."""
+        ws = self.wait_src
+        if ws is not None and ws[0] == pair.uid and ws[1] == side:
+            return ws[2]
+        return None
+
+    def _restore_wait_source(self):
+        """Put the waiting half back as it was (preview cancelled)."""
+        ws = self.wait_src
+        self.wait_src = None
+        if ws is None:
+            return
+        pair = P.by_uid(self.mw, ws[0])
+        if pair is None or P.coords(pair, ws[1]) == ws[2]:
+            return
+        P.set_coords(pair, ws[1], ws[2])
+        P.set_samples_quietly(pair, ws[3])
         self.changed(pair.uid)
 
     def _confirm_curve(self):
@@ -1072,6 +1211,7 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
         hits = self.preview
         self.state = 'IDLE'
         self.preview = []
+        self.wait_src = None
         if not hits:
             self.stroke = []
             return
@@ -1374,13 +1514,25 @@ class MESHWRAP_OT_editor(bpy.types.Operator):
         if t == 'TAB' and not event.ctrl:
             self.set_tool('EDIT' if self.tool == 'DRAW' else 'DRAW')
             return {'RUNNING_MODAL'}
-        if t == 'Z' and event.ctrl:
-            if idle:
-                self.redo() if event.shift else self.undo()
-            return {'RUNNING_MODAL'}
-        if t == 'Y' and event.ctrl:
-            if idle:
-                self.redo()
+        if (t == 'Z' or t == 'Y') and event.ctrl:
+            redo = t == 'Y' or event.shift
+            in_stroke = (self.tool == 'DRAW'
+                         and self.state in ('POINTS', 'PREVIEW')
+                         and self.pt_drag is None)
+            if in_stroke:
+                if not redo:
+                    self._stroke_undo()
+                elif not self._stroke_redo():
+                    self.say("Nothing to redo")
+                self.stage.redraw()
+            elif idle:
+                if redo and self._stroke_redo():
+                    self.stage.redraw()
+                elif redo:
+                    self.redo()
+                else:
+                    self.undone_stroke = None
+                    self.undo()
             return {'RUNNING_MODAL'}
         if t == 'Z' and event.alt:
             mw.xray = not mw.xray

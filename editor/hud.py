@@ -32,6 +32,7 @@ SHORTCUTS = (
         ("Click", "place points (drag one to move it)"),
         ("Enter / Right-click", "finish points"),
         ("Backspace", "remove last point"),
+        ("Ctrl + Z / Ctrl + Shift + Z", "undo / redo points and preview"),
         ("Wheel / arrows / digits", "point count (preview)"),
         ("Click (preview)", "confirm the curve"),
         ("Click border edge", "curve from a mesh border"),

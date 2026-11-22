@@ -76,6 +76,17 @@ def sample_count(pair):
 # stepping the count down and back up resamples the original shape instead of
 # losing detail each time.  Any other edit of the points starts a new source.
 _SOURCES = {}
+_QUIET = [0]
+
+
+def set_samples_quietly(pair, count):
+    """Set ``pair.samples`` without the sidebar's resample-on-change (for
+    code that has already placed the points itself)."""
+    _QUIET[0] += 1
+    try:
+        pair.samples = count
+    finally:
+        _QUIET[0] -= 1
 
 
 def resample_pair(context, pair, count):
@@ -86,7 +97,7 @@ def resample_pair(context, pair, count):
     import numpy as np
 
     from . import display, sampling, snapping
-    if is_point_pair(pair) or count < 2:
+    if _QUIET[0] or is_point_pair(pair) or count < 2:
         return
     scene = pair.id_data
     mw = getattr(scene, "mesh_wrap", None)
