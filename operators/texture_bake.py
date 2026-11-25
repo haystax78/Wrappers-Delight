@@ -40,7 +40,8 @@ Modes
       destination islands (nearest covered texel, computed once per size)
       instead of Blender's adjacent-faces fill.
 
-Outputs are named ``<source name><suffix><source extension>``.  The UI runs
+Outputs are named ``<source name><suffix><source extension>``, all
+lower-case.  The UI runs
 the bake modally, one image per timer tick, so the panel's progress bar
 updates after every image (Esc stops after the current one).  Afterwards
 every datablock created during the run (loaded and generated images,
@@ -878,7 +879,7 @@ def _jobs(tb, out_dir):
         if not os.path.isfile(src):
             raise BakeError(f"File not found: {src}")
         stem, ext = os.path.splitext(os.path.basename(src))
-        name = f"{stem}{tb.suffix}{ext}"
+        name = f"{stem}{tb.suffix}{ext}".lower()   # lower-case only
         dst = os.path.normpath(os.path.join(out_dir, name))
         if os.path.normcase(dst) == os.path.normcase(src):
             raise BakeError(f"'{name}' would overwrite its source: set a "
@@ -909,7 +910,7 @@ class MESHWRAP_OT_texture_bake(bpy.types.Operator):
     bl_idname = "meshwrap.texture_bake"
     bl_label = "Process"
     bl_description = ("Bake every listed image into the other mesh's UV "
-                      "layout and save it to the output folder (name + "
+                      "layout and save it to the output folder (lower-case name + "
                       "suffix) in the same format, bit depth and resolution")
     bl_options = {'REGISTER'}
 

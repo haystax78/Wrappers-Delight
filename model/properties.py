@@ -182,7 +182,8 @@ class TextureBakeSettings(bpy.types.PropertyGroup):
     output_dir: bpy.props.StringProperty(
         name="Output Folder", subtype='DIR_PATH',
         description="Folder the baked images are written to (source file "
-                    "name plus the suffix, same format as the source)",
+                    "name plus the suffix, all lower-case, same format as the "
+                    "source)",
     )
     suffix: bpy.props.StringProperty(
         name="Suffix", default="_baked",

@@ -63,7 +63,7 @@ curves drawn on both meshes. Result is stored in a `Wrapped` shape key.
   island borders), not Blender's adjacent-faces fill.
   PSD/PSB bypass Blender's loader/writer: `model/psd.py` reads/writes the
   merged image raw (Gray/RGB, 8/16/32, raw/RLE/ZIP; output flat, raw).
-  Output name = stem + `suffix` + ext. UI path is modal (one image per
+  Output name = (stem + `suffix` + ext).lower(). UI path is modal (one image per
   timer tick, `status()` feeds the panel progress bar, input swallowed);
   `execute` runs blocking for scripts/background. Scene settings and
   selection are restored; `_DataSnapshot.purge()` removes every
