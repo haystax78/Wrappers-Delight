@@ -1,10 +1,11 @@
-"""Sidebar operators: pair management and fitting."""
+"""Sidebar operators: pair management, fitting, templates, texture bake."""
 
 import bpy
 
-from . import fit, pairs, templates
+from . import fit, pairs, templates, texture_bake
 
-CLASSES = pairs.CLASSES + fit.CLASSES + templates.CLASSES
+CLASSES = (pairs.CLASSES + fit.CLASSES + templates.CLASSES
+           + texture_bake.CLASSES)
 
 
 def register():

@@ -20,6 +20,7 @@ curves drawn on both meshes. Result is stored in a `Wrapped` shape key.
   - `display.py`: cached surface-projected draw geometry per (pair, side).
   - `meshdata.py`: bulk mesh array reads (int attributes copied straight from
     memory with a layout check; RNA `foreach_get` takes seconds on dense scans).
+  - `psd.py`: PSD/PSB merged-image reader/writer (numpy) for Texture Bake.
   - `legacy.py`, `snapping.py`.
 - **solver/** — numpy + mathutils only
   - `transforms.py`: weighted similarity fit, polyharmonic landmark warp.
@@ -42,6 +43,19 @@ curves drawn on both meshes. Result is stored in a `Wrapped` shape key.
   (`<name>.blend` = cage on its rest shape with materials, images packed;
   `curves.json` = cage halves + pair settings). Import makes it the cage and
   recreates the pairs cage-side only.
+  `texture_bake.py`: Texture Bake panel ops (`Scene.mesh_wrap.texture_bake`).
+  Cycles selected-to-active Emit bake from temp evaluated copies (cage at
+  full Wrapped), everything Non-Color + channel-packed alpha so values pass
+  raw; float buffer at 1/2/4x then box-filtered; alpha in a 2nd pass;
+  pixels written into a fresh load of the source and `Image.save(filepath=)`
+  so the file's format/bit depth/channels/codec come from its own ImBuf.
+  PSD/PSB bypass Blender's loader/writer: `model/psd.py` reads/writes the
+  merged image raw (Gray/RGB, 8/16/32, raw/RLE/ZIP; output flat, raw).
+  Output name = stem + `suffix` + ext. UI path is modal (one image per
+  timer tick, `status()` feeds the panel progress bar, input swallowed);
+  `execute` runs blocking for scripts/background. Scene settings and
+  selection are restored; `_DataSnapshot.purge()` removes every
+  image/mesh/material/object/collection created during the run.
 - **editor/** — the two-view curve editor
   - `stage.py`: new window or split view, local views, chrome hiding, camera link.
   - `session.py`: modal operator (`meshwrap.editor`), Draw/Edit tools, private undo.
@@ -62,7 +76,7 @@ curves drawn on both meshes. Result is stored in a `Wrapped` shape key.
   pref `auto_update`, respects `bpy.app.online_access`) and in-place install
   (keeps `templates/`, refuses a git checkout). Worker threads only touch the
   `state` dict; a main-thread timer repaints.
-- **ui/** — `panels.py` (sidebar: Mesh Wrap > Correspondences / Fit / Result), `overlay.py`.
+- **ui/** — `panels.py` (sidebar: Mesh Wrap > Correspondences / Fit / Result / Texture Bake), `overlay.py`.
 
 ## Verification
 ```bash

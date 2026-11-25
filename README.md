@@ -51,6 +51,18 @@ Wrap a clean cage mesh onto any scan or sculpt by drawing matching curves on bot
   - bake the result to a new object;
   - remove the result.
 
+## Texture Bake
+
+A collapsed **Texture Bake** panel at the bottom of the sidebar moves image textures from one mesh's UV layout to the other's once the cage is wrapped.
+
+- Add image files to the list, choose an **Output** folder, a file name **Suffix** (default `_baked`, so `skin.png` becomes `skin_baked.png`) and a direction: **Cage → Target** or **Target → Cage**.
+- **Process** bakes every image with Cycles and saves it to the output folder. A progress bar in the panel advances after each image; **Esc** stops after the current one.
+- The result keeps the source's **file format, resolution, bit depth, channels (including alpha) and color encoding**. Values are transferred as raw data, so sRGB textures, linear EXRs, normal maps and masks come out exactly as they went in, just re-laid out.
+- **PSD and PSB** files (RGB or Grayscale, 8/16/32-bit) are supported. The merged image is baked and saved as a flat file with the same mode, bit depth, alpha and ICC profile. Layers and extra alpha channels beyond the first are not kept.
+- Nothing is left behind in the .blend: every image, mesh and material the bake loads or creates is removed when it finishes.
+- **Supersampling** (1×, 2×, 4×) bakes at a higher resolution and filters down for clean edges. **Margin** extends the islands past their UV borders. **Search Distance** sets how far off the surface the other mesh is looked for.
+- The cage is used in its full Wrapped shape. Each mesh's active UV map is used.
+
 ## Sidebar
 
 - Pick the cage and the target. Below that is a pair list with colour, status, enable and hide controls, and an **eyedropper** to select a pair by clicking its curve in the viewport.

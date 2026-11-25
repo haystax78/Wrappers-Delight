@@ -4,7 +4,10 @@
       Correspondences    the pair list, the active pair, the curve editor
       Fit                preset and options, the Wrap button
       Result             blend slider, bake, remove
+      Texture Bake       move image textures between the two UV layouts
 """
+
+import os
 
 import bpy
 
@@ -12,6 +15,7 @@ from ..editor import session
 from ..model import legacy
 from ..model import pairs as P
 from ..operators import fit as fit_ops
+from ..operators import texture_bake as bake_ops
 
 ADDON_NAME = "Wrapper's Delight"
 CATEGORY = ADDON_NAME
@@ -75,6 +79,18 @@ class MESHWRAP_UL_pairs(bpy.types.UIList):
                  icon='CHECKBOX_HLT' if pair.enabled else 'CHECKBOX_DEHLT')
         row.prop(pair, "hidden", text="", emboss=False,
                  icon='HIDE_ON' if pair.hidden else 'HIDE_OFF')
+
+
+class MESHWRAP_UL_bake_images(bpy.types.UIList):
+    bl_idname = "MESHWRAP_UL_bake_images"
+
+    def draw_item(self, context, layout, data, item, icon, active_data,
+                  active_prop, index=0, flt_flag=0):
+        path = bpy.path.abspath(item.filepath)
+        row = layout.row(align=True)
+        row.alert = not os.path.isfile(path)
+        row.label(text=item.name or os.path.basename(path),
+                  icon='ERROR' if row.alert else 'IMAGE_DATA')
 
 
 class _Panel:
@@ -295,11 +311,68 @@ class MESHWRAP_PT_result(_Panel, bpy.types.Panel):
         row.operator("meshwrap.result_clear", text="", icon='TRASH')
 
 
+class MESHWRAP_PT_texture_bake(_Panel, bpy.types.Panel):
+    bl_idname = "MESHWRAP_PT_texture_bake"
+    bl_label = "Texture Bake"
+    bl_parent_id = "MESHWRAP_PT_main"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    @classmethod
+    def poll(cls, context):
+        return _ready(context.scene.mesh_wrap)
+
+    def draw(self, context):
+        layout = self.layout
+        mw = context.scene.mesh_wrap
+        tb = mw.texture_bake
+
+        row = layout.row()
+        row.template_list("MESHWRAP_UL_bake_images", "", tb, "images", tb,
+                          "image_index", rows=4)
+        side = row.column(align=True)
+        side.operator("meshwrap.bake_image_add", text="", icon='ADD')
+        side.operator("meshwrap.bake_image_remove", text="", icon='REMOVE')
+        side.separator()
+        side.operator("meshwrap.bake_image_clear", text="", icon='TRASH')
+
+        layout.row().prop(tb, "direction", expand=True)
+
+        col = layout.column()
+        col.use_property_split = True
+        col.use_property_decorate = False
+        col.prop(tb, "output_dir", text="Output")
+        col.prop(tb, "suffix")
+        col.row().prop(tb, "supersample", expand=True)
+        col.prop(tb, "margin")
+        col.prop(tb, "distance", slider=True)
+
+        if fit_ops.result_key(mw.cage) is None:
+            layout.label(text="No Wrapped result: cage used as it is",
+                         icon='INFO')
+
+        st = bake_ops.status()
+        if st["running"]:
+            frac = st["done"] / max(st["total"], 1)
+            text = (f"{st['done']} / {st['total']}  ·  {st['label']}  "
+                    f"(Esc to stop)")
+            if hasattr(layout, "progress"):
+                layout.progress(factor=frac, text=text)
+            else:
+                layout.label(text=f"{int(frac * 100)}%  {text}")
+            return
+        row = layout.row()
+        row.scale_y = 1.6
+        row.operator("meshwrap.texture_bake", text="Process",
+                     icon='RENDER_STILL')
+
+
 CLASSES = (
     MESHWRAP_UL_pairs,
+    MESHWRAP_UL_bake_images,
     MESHWRAP_MT_pairs_extra,
     MESHWRAP_PT_main,
     MESHWRAP_PT_pairs,
     MESHWRAP_PT_fit,
     MESHWRAP_PT_result,
+    MESHWRAP_PT_texture_bake,
 )

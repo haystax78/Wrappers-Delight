@@ -132,6 +132,74 @@ class LegacyLandmark(bpy.types.PropertyGroup):
     curve_closed: bpy.props.BoolProperty()
 
 
+# --------------------------------------------------------- texture bake ---
+
+BAKE_DIRECTIONS = [
+    ('CAGE_TO_TARGET', "Cage → Target",
+     "The images are laid out in the cage's UVs: bake them into the "
+     "target's UV layout"),
+    ('TARGET_TO_CAGE', "Target → Cage",
+     "The images are laid out in the target's UVs: bake them into the "
+     "cage's UV layout"),
+]
+
+BAKE_SUPERSAMPLE = [
+    ('1', "1×", "One sample per output pixel (fastest)"),
+    ('2', "2×", "Bake at twice the resolution and filter down "
+                    "(anti-aliased, recommended)"),
+    ('4', "4×", "Bake at four times the resolution and filter down "
+                    "(slowest, needs the most memory)"),
+]
+
+
+class BakeImage(bpy.types.PropertyGroup):
+    """One image file in the Texture Bake list (``name`` = file name)."""
+
+    filepath: bpy.props.StringProperty(
+        name="File", subtype='FILE_PATH',
+        description="Image file to transfer to the other UV layout",
+    )
+
+
+class TextureBakeSettings(bpy.types.PropertyGroup):
+    images: bpy.props.CollectionProperty(type=BakeImage)
+    image_index: bpy.props.IntProperty(name="Active Image", default=0)
+    output_dir: bpy.props.StringProperty(
+        name="Output Folder", subtype='DIR_PATH',
+        description="Folder the baked images are written to (source file "
+                    "name plus the suffix, same format as the source)",
+    )
+    suffix: bpy.props.StringProperty(
+        name="Suffix", default="_baked",
+        description="Added to each output file name, before the extension "
+                    "(e.g. skin.png -> skin_baked.png)",
+    )
+    direction: bpy.props.EnumProperty(
+        name="Direction", items=BAKE_DIRECTIONS, default='CAGE_TO_TARGET',
+        description="Which mesh's UV layout the images are in, and which "
+                    "one they are baked into",
+    )
+    supersample: bpy.props.EnumProperty(
+        name="Supersampling", items=BAKE_SUPERSAMPLE, default='2',
+        description="Bake at a multiple of the output resolution and box "
+                    "filter down for anti-aliased edges and seams",
+    )
+    margin: bpy.props.IntProperty(
+        name="Margin", default=16, min=0, max=128, subtype='PIXEL',
+        description="Pixels to extend the baked islands past their UV "
+                    "borders (filled from the adjacent faces), hiding seams "
+                    "when the result is mip-mapped",
+    )
+    distance: bpy.props.FloatProperty(
+        name="Search Distance", default=0.01, min=0.0001, max=0.5,
+        soft_max=0.1, subtype='FACTOR', precision=4,
+        description="How far off the surface to look for the other mesh, "
+                    "as a fraction of the mesh size. Raise it if parts of "
+                    "the bake come out black, lower it if thin parts pick "
+                    "up the wrong side",
+    )
+
+
 # ------------------------------------------------------------- settings ---
 
 FIT_PRESETS = [
@@ -258,11 +326,15 @@ class WrapSettings(bpy.types.PropertyGroup):
                     "on it",
     )
 
+    # --- texture bake ---
+    texture_bake: bpy.props.PointerProperty(type=TextureBakeSettings)
+
     # --- legacy ---
     landmarks: bpy.props.CollectionProperty(type=LegacyLandmark)
 
 
-CLASSES = (CurvePoint, CurvePair, LegacyLandmark, WrapSettings)
+CLASSES = (CurvePoint, CurvePair, LegacyLandmark, BakeImage,
+           TextureBakeSettings, WrapSettings)
 
 
 def register():
