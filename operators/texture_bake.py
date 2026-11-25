@@ -39,6 +39,10 @@ Modes
       in numpy (bilinear, repeat).  Margin is an outward extension of the
       destination islands (nearest covered texel, computed once per size)
       instead of Blender's adjacent-faces fill.
+      With ``use_gpu`` (default) all of that runs in compute shaders
+      instead (:mod:`.gpu_resample`): same rays, same normal matching, same
+      margin rule.  Anything the GPU can't do falls back to the above,
+      first the lookup, then the sampling.
 
 Outputs are named ``<source name><suffix><source extension>``, all
 lower-case.  The UI runs
@@ -63,6 +67,7 @@ from ..editor import session
 from ..model import psd
 from ..solver.surface import tree_from_arrays, triangles_local
 from . import fit as fit_ops
+from . import gpu_resample
 
 IMAGE_EXTENSIONS = (
     "*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.exr;*.tga;*.bmp;*.webp;*.hdr;"
@@ -71,6 +76,9 @@ IMAGE_EXTENSIONS = (
 # Largest bake buffer (pixels) supersampling may grow to; beyond this the
 # factor is reduced (a float RGBA buffer of this size is 1 GiB).
 MAX_BAKE_PIXELS = 8192 * 8192
+
+# Resample lookups kept on the GPU at once (an 8K one is 0.5 GiB).
+GPU_LOOKUPS = 2
 
 _TMP = "WD_TextureBake"
 
@@ -363,6 +371,10 @@ class _Rig:
         self._fixes = {}        # bake size -> normal-matching corrections
         self._lookups = {}      # bake size -> Resample UV lookup
         self._geo = None        # source BVH + per-triangle data, lazily
+        self._tracer = None     # GPU ray caster, lazily
+        self._gpu_lookups = {}  # bake size -> gpu_resample.Lookup
+        self._gpu_trace = self._gpu_sample = bool(settings.use_gpu)
+        self.gpu_notes = []
         try:
             self._build(src_obj, dst_obj)
         except BaseException:
@@ -575,6 +587,9 @@ class _Rig:
         while ss > 1 and w * h * ss * ss > MAX_BAKE_PIXELS:
             ss //= 2
         if self.settings.mode == 'RESAMPLE':
+            out = self._resample_gpu(img, w, h, ss, has_alpha)
+            if out is not None:
+                return out, ss
             out = self._resample_image(img, w, h, ss)
         else:
             out = self._bake_image(img, w, h, ss, has_alpha)
@@ -626,6 +641,67 @@ class _Rig:
             out[idx] = _sample(_image_rgba(img, w, h), uv)
         out[mdst] = out[msrc]
         return out.reshape(bh, bw, 4)
+
+    # -- GPU resampling ---------------------------------------------------
+
+    def _gpu_off(self, what, reason):
+        msg = f"GPU {what} not used ({reason})"
+        print(f"Wrapper's Delight: {msg}")
+        self.gpu_notes.append(f"{msg}: used the CPU instead")
+
+    def _resample_gpu(self, img, w, h, ss, has_alpha):
+        """Resample mode on the GPU, downsampled; None to use the CPU."""
+        if not self._gpu_sample:
+            return None
+        reason = gpu_resample.unavailable()
+        if reason:
+            self._gpu_sample = False
+            self._gpu_off("resampling", reason)
+            return None
+        try:
+            lookup = self._gpu_lookup(w * ss, h * ss, ss)
+            out = gpu_resample.Sampler.sample(_image_rgba(img, w, h), lookup,
+                                              w, h, ss)
+        except (BakeError, KeyboardInterrupt):
+            raise
+        except Exception as exc:  # noqa: BLE001 - CPU path still works
+            self._gpu_sample = False
+            self._gpu_lookups.clear()
+            self._gpu_off("resampling", f"{type(exc).__name__}: {exc}")
+            return None
+        if not has_alpha:
+            out[..., 3] = 1.0
+        return out
+
+    def _gpu_lookup(self, bw, bh, ss):
+        key = (bw, bh)
+        if key in self._gpu_lookups:
+            return self._gpu_lookups[key]
+        while len(self._gpu_lookups) >= GPU_LOOKUPS:   # video memory
+            self._gpu_lookups.pop(next(iter(self._gpu_lookups)))
+        lookup = None
+        if self._gpu_trace:
+            reason = gpu_resample.trace_unavailable()
+            if reason:
+                self._gpu_trace = False
+                self._gpu_off("ray casting", reason)
+        if self._gpu_trace:
+            try:
+                if self._tracer is None:
+                    self._tracer = gpu_resample.Tracer.between(
+                        self.src, self.src_uv, self.dst, self.dst_uv,
+                        self.extrusion, self.settings.normal_angle)
+                lookup = self._tracer.lookup(bw, bh,
+                                             self.settings.margin * ss)
+            except Exception as exc:  # noqa: BLE001 - Cycles still works
+                self._gpu_trace = False
+                self._tracer = None
+                self._gpu_off("ray casting", f"{type(exc).__name__}: {exc}")
+        if lookup is None:
+            lookup = gpu_resample.Lookup.from_texels(
+                bw, bh, *self._lookup(bw, bh, ss))
+        self._gpu_lookups[key] = lookup
+        return lookup
 
     def _lookup(self, bw, bh, ss):
         """(hit texels, their source UVs, margin dst, margin src) for a
@@ -815,6 +891,8 @@ class _Rig:
         self.state.restore()
         self._fixes.clear()
         self._lookups.clear()
+        self._gpu_lookups.clear()
+        self._tracer = None
         self._geo = None
         for obj in self.objs:
             me = obj.data
@@ -998,6 +1076,7 @@ class MESHWRAP_OT_texture_bake(bpy.types.Operator):
 
     def _finish(self, context, cancelled=False):
         context.window_manager.progress_end()
+        self.notes.extend(self.rig.gpu_notes)
         try:
             self.rig.close()
         finally:

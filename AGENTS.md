@@ -61,6 +61,17 @@ curves drawn on both meshes. Result is stored in a `Wrapped` shape key.
   just `_sample`d through the cached lookup. Margin there is our own
   outward extension (`_margin_map`, nearest covered texel, ring growth from
   island borders), not Blender's adjacent-faces fill.
+  `gpu_resample.py`: RESAMPLE on the GPU (`use_gpu`, default): destination
+  drawn in UV space (position + normal), compute-shader rays against an
+  implicit Morton-order BVH of the source (normal limit applied while
+  traversing), margin rings, sampling + box filter. Lookup = one RG32F
+  texture of source UVs with MISS/OUTSIDE markers, margin baked in. Tiled
+  with readbacks (driver timeouts). Self-tests on first use; any failure
+  falls back to the Cycles lookup, then numpy sampling. Shader rules: BVH
+  data in textures read as images (no storage buffers before 5.3), one
+  sampler per compute shader (OpenGL name-dependent binding bug), no `%` on
+  negative ints. Blender 5.3's baker also fills texels up to 1/3 texel
+  outside the islands; the GPU path covers texel centres only, like 5.2.
   PSD/PSB bypass Blender's loader/writer: `model/psd.py` reads/writes the
   merged image raw (Gray/RGB, 8/16/32, raw/RLE/ZIP; output flat, raw).
   Output name = (stem + `suffix` + ext).lower(). UI path is modal (one image per

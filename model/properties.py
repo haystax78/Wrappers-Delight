@@ -222,6 +222,11 @@ class TextureBakeSettings(bpy.types.PropertyGroup):
                     "and nearby parts facing another way (back of the ear "
                     "vs. the head) are passed through. 180 turns it off",
     )
+    use_gpu: bpy.props.BoolProperty(
+        name="Use GPU", default=True,
+        description="Resample on the graphics card, which is many times "
+                    "faster. Falls back to the CPU when it can't be used",
+    )
 
 
 # ------------------------------------------------------------- settings ---

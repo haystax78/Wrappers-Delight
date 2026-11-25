@@ -61,6 +61,7 @@ A collapsed **Texture Bake** panel at the bottom of the sidebar moves image text
 - **PSD and PSB** files (RGB or Grayscale, 8/16/32-bit) are supported. The merged image is baked and saved as a flat file with the same mode, bit depth, alpha and ICC profile. Layers and extra alpha channels beyond the first are not kept.
 - Nothing is left behind in the .blend: every image, mesh and material the bake loads or creates is removed when it finishes.
 - **Supersampling** (1×, 2×, 4×) bakes at a higher resolution and filters down for clean edges. **Margin** extends the islands past their UV borders. **Search Distance** sets how far off the surface the other mesh is looked for.
+- **Resample** mode finds where every texel lands once and then samples each image through that, instead of baking every image. With **Use GPU** (on by default) it runs on the graphics card, usually taking seconds instead of minutes. If the GPU can't be used, it falls back to the CPU by itself.
 - The cage is used in its full Wrapped shape. Each mesh's active UV map is used.
 
 ## Sidebar

@@ -348,6 +348,8 @@ class MESHWRAP_PT_texture_bake(_Panel, bpy.types.Panel):
         col.prop(tb, "margin")
         col.prop(tb, "distance", slider=True)
         col.prop(tb, "normal_angle")
+        if tb.mode == 'RESAMPLE':
+            col.prop(tb, "use_gpu")
 
         if fit_ops.result_key(mw.cage) is None:
             layout.label(text="No Wrapped result: cage used as it is",

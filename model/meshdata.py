@@ -85,3 +85,28 @@ def face_starts(mesh):
     out = np.empty(len(mesh.polygons), np.int32)
     mesh.polygons.foreach_get("loop_start", out)
     return out
+
+
+def corner_vertices(mesh):
+    """(corners,) int32 vertex index of every face corner."""
+    n = len(mesh.loops)
+    out = int_attribute(mesh, ".corner_vert", n, 1)
+    if out is None:
+        out = np.empty(n, np.int32)
+        mesh.loops.foreach_get("vertex_index", out)
+        return out
+    return out[:, 0]
+
+
+def triangle_corners(mesh):
+    """(triangles, 3) int32 corner indices (after calc_loop_triangles)."""
+    n = len(mesh.loop_triangles)
+    out = _raw(mesh.loop_triangles, n, 3, ctypes.c_int32, np.int32)
+    # the raw layout is only trusted when it agrees with RNA
+    if out is not None and n and all(
+            tuple(out[i]) == tuple(mesh.loop_triangles[i].loops)
+            for i in (0, n // 2, n - 1)):
+        return out
+    flat = np.empty(n * 3, np.int32)
+    mesh.loop_triangles.foreach_get("loops", flat)
+    return flat.reshape(n, 3)
