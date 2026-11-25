@@ -22,6 +22,23 @@ Fidelity rules
       write them): the merged image is read and written raw, keeping mode,
       bit depth, alpha, resolution and the ICC profile.
     * The cage is baked in its Wrapped shape (full strength) when one exists.
+    * Normal matching: Blender's bake takes the first surface the ray hits,
+      even a back face or a nearby part facing another way (the back of the
+      ear top vs. the head).  Three extra passes per bake size record the
+      destination normal, the normal of the face that was hit and the
+      destination position; texels whose hit is more than ``normal_angle``
+      off are searched again in Python (same ray, faces outside the angle
+      passed through) and filled by sampling the source image at the new
+      hit's UV (bilinear, repeat, like the image node).
+
+Modes
+    * Bake: every image is baked with Cycles as above.
+    * Resample: one Cycles bake per bake size records, for every
+      destination texel, the source UV its ray lands on (with normal
+      matching applied); each image is then just sampled through that map
+      in numpy (bilinear, repeat).  Margin is an outward extension of the
+      destination islands (nearest covered texel, computed once per size)
+      instead of Blender's adjacent-faces fill.
 
 Outputs are named ``<source name><suffix><source extension>``.  The UI runs
 the bake modally, one image per timer tick, so the panel's progress bar
@@ -33,6 +50,7 @@ Scene state touched during the bake (engine, sampling, selection, the
 Wrapped key value) is restored afterwards.
 """
 
+import math
 import os
 import zlib
 
@@ -42,6 +60,7 @@ import bpy
 
 from ..editor import session
 from ..model import psd
+from ..solver.surface import tree_from_arrays, triangles_local
 from . import fit as fit_ops
 
 IMAGE_EXTENSIONS = (
@@ -199,6 +218,114 @@ def _world_size(obj):
     return float(np.linalg.norm(co.max(0) - co.min(0)))
 
 
+def _world_bounds(obj):
+    me = obj.data
+    co = np.empty(len(me.vertices) * 3, np.float64)
+    me.vertices.foreach_get("co", co)
+    m = np.array(obj.matrix_world, np.float64)
+    co = co.reshape(-1, 3) @ m[:3, :3].T + m[:3, 3]
+    return co.min(0), co.max(0)
+
+
+def _decode_unit(px):
+    """Normals were emitted as n * 0.5 + 0.5 (no negative emission)."""
+    return px[..., :3].astype(np.float64) * 2.0 - 1.0
+
+
+def _sample(px, uv):
+    """Bilinear, repeat-wrapped lookup of ``px`` (h, w, 4, bottom-up) at
+    ``uv`` (m, 2), matching Cycles' Linear image interpolation."""
+    h, w = px.shape[:2]
+    x = uv[:, 0] * w - 0.5
+    y = uv[:, 1] * h - 0.5
+    x0 = np.floor(x)
+    y0 = np.floor(y)
+    tx = (x - x0)[:, None]
+    ty = (y - y0)[:, None]
+    ix0 = x0.astype(np.int64) % w
+    iy0 = y0.astype(np.int64) % h
+    ix1 = (ix0 + 1) % w
+    iy1 = (iy0 + 1) % h
+    top = px[iy1, ix0] * (1 - tx) + px[iy1, ix1] * tx
+    bot = px[iy0, ix0] * (1 - tx) + px[iy0, ix1] * tx
+    return (bot * (1 - ty) + top * ty).astype(np.float32)
+
+
+def _image_rgba(img, w, h):
+    """Pixels of ``img`` as float32 (h, w, 4), bottom-up."""
+    n = len(img.pixels)
+    ch = n // (w * h)
+    raw = np.empty(n, np.float32)
+    img.pixels.foreach_get(raw)
+    raw = raw.reshape(h, w, ch)
+    if ch == 4:
+        return raw
+    px = np.ones((h, w, 4), np.float32)
+    if ch < 3:
+        px[..., :3] = raw[..., :1]
+        if ch == 2:
+            px[..., 3] = raw[..., 1]
+    else:
+        px[..., :3] = raw[..., :3]
+    return px
+
+
+def _slices(d, n):
+    """(destination, source) slices shifting an axis of length n by d."""
+    if d >= 0:
+        return slice(d, n), slice(0, n - d)
+    return slice(0, n + d), slice(-d, n)
+
+
+_NEIGHBOURS = ((0, 1), (0, -1), (1, 0), (-1, 0),
+               (1, 1), (1, -1), (-1, 1), (-1, -1))
+
+
+def _margin_map(covered, radius):
+    """(dst, src) flat texel indices: every uncovered texel within
+    ``radius`` steps of the covered ones copies its nearest covered texel
+    (grown ring by ring from the island borders, straight neighbours
+    before diagonal ones), so the work follows the margin band, not the
+    whole image."""
+    h, w = covered.shape
+    empty = np.empty(0, np.int64)
+    if radius <= 0 or covered.all() or not covered.any():
+        return empty, empty
+    # Border texels: covered with an uncovered neighbour.
+    border = np.zeros_like(covered)
+    for dy, dx in _NEIGHBOURS:
+        ydst, ysrc = _slices(dy, h)
+        xdst, xsrc = _slices(dx, w)
+        border[ydst, xdst] |= ~covered[ysrc, xsrc]
+    border &= covered
+    near = np.full(h * w, -1, np.int32 if h * w < 2**31 else np.int64)
+    flat = covered.ravel()
+    near[flat] = np.flatnonzero(flat)
+    front = np.flatnonzero(border.ravel())
+    filled = []
+    for _ in range(radius):
+        if front.size == 0:
+            break
+        fy, fx = np.divmod(front, w)
+        ring = []
+        for dy, dx in _NEIGHBOURS:
+            ny, nx = fy - dy, fx - dx
+            ok = (ny >= 0) & (ny < h) & (nx >= 0) & (nx < w)
+            n = ny[ok] * w + nx[ok]
+            src = front[ok]
+            todo = near[n] < 0
+            n, src = n[todo], src[todo]
+            if n.size == 0:
+                continue
+            n, first = np.unique(n, return_index=True)
+            near[n] = near[src[first]]
+            ring.append(n)
+        front = np.concatenate(ring) if ring else empty
+        filled.append(front)
+    dst = np.concatenate(filled) if filled else empty
+    return dst, near[dst].astype(np.int64)
+
+
 class _Restore:
     """Remember attributes and put them back in reverse order."""
 
@@ -232,6 +359,9 @@ class _Rig:
         self.coll = None
         self.mats = []
         self.objs = []
+        self._fixes = {}        # bake size -> normal-matching corrections
+        self._lookups = {}      # bake size -> Resample UV lookup
+        self._geo = None        # source BVH + per-triangle data, lazily
         try:
             self._build(src_obj, dst_obj)
         except BaseException:
@@ -254,6 +384,7 @@ class _Rig:
         nt = self.src_mat.node_tree
         uv = nt.nodes.new("ShaderNodeUVMap")
         uv.uv_map = self.src_uv
+        self.src_uvmap = uv
         self.src_tex = nt.nodes.new("ShaderNodeTexImage")
         self.src_tex.interpolation = 'Linear'
         self.src_tex.extension = 'REPEAT'
@@ -262,13 +393,28 @@ class _Rig:
         out = nt.nodes.new("ShaderNodeOutputMaterial")
         nt.links.new(uv.outputs["UV"], self.src_tex.inputs["Vector"])
         nt.links.new(self.emit.outputs["Emission"], out.inputs["Surface"])
+        # Face normal of the hit, for normal matching.
+        geo = nt.nodes.new("ShaderNodeNewGeometry")
+        self.src_nrm = self._encode(nt, geo.outputs["True Normal"],
+                                    (0.5,) * 3, (0.5,) * 3)
 
-        # Destination: the active image node Cycles bakes into.
+        # Destination: the active image node Cycles bakes into.  Its own
+        # emission (normal / position) is only used by the passes that bake
+        # the destination by itself, for normal matching.
         self.dst_mat = _new_material(f"{_TMP}_target")
         self.mats.append(self.dst_mat)
-        self.dst_tex = self.dst_mat.node_tree.nodes.new("ShaderNodeTexImage")
+        nt = self.dst_mat.node_tree
+        self.dst_tex = nt.nodes.new("ShaderNodeTexImage")
+        self.dst_emit = nt.nodes.new("ShaderNodeEmission")
+        self.dst_emit.inputs["Strength"].default_value = 1.0
+        out = nt.nodes.new("ShaderNodeOutputMaterial")
+        nt.links.new(self.dst_emit.outputs["Emission"],
+                     out.inputs["Surface"])
+        self.dst_geo = nt.nodes.new("ShaderNodeNewGeometry")
+        self.dst_nrm = self._encode(nt, self.dst_geo.outputs["Normal"],
+                                    (0.5,) * 3, (0.5,) * 3)
         self.dst_tex.select = True
-        self.dst_mat.node_tree.nodes.active = self.dst_tex
+        nt.nodes.active = self.dst_tex
 
         # Evaluate the cage in its full Wrapped shape.
         cage = scene.mesh_wrap.cage
@@ -291,6 +437,30 @@ class _Rig:
         size = max(_world_size(self.dst), _world_size(self.src))
         self.extrusion = max(size * self.settings.distance, 1e-6)
 
+        # Source UV for Resample, emitted as (uv - lo) / span with B = 1
+        # marking texels that hit something.
+        me = self.src.data
+        uvs = np.empty(len(me.loops) * 2, np.float64)
+        me.uv_layers[self.src_uv].uv.foreach_get("vector", uvs)
+        uvs = uvs.reshape(-1, 2)
+        ulo, uhi = ((uvs.min(0), uvs.max(0)) if len(uvs)
+                    else (np.zeros(2), np.ones(2)))
+        self.uv_span = np.maximum(uhi - ulo, 1e-6)
+        self.uv_lo = ulo
+        self.src_uvenc = self._encode(
+            self.src_mat.node_tree, self.src_uvmap.outputs["UV"],
+            (1.0 / self.uv_span[0], 1.0 / self.uv_span[1], 0.0),
+            (-ulo[0] / self.uv_span[0], -ulo[1] / self.uv_span[1], 1.0))
+
+        # Destination position, emitted as (p - lo) / span in [0, 1].
+        lo, hi = _world_bounds(self.dst)
+        span = np.maximum(hi - lo, 1e-6) * 1.02
+        self.pos_lo = lo - (span * 0.01)
+        self.pos_span = span
+        self.dst_pos = self._encode(
+            self.dst_mat.node_tree, self.dst_geo.outputs["Position"],
+            tuple(1.0 / span), tuple(-self.pos_lo / span))
+
         st = self.state
         st.set(scene.render, "engine", 'CYCLES')
         st.set(scene.render, "use_simplify", False)
@@ -305,14 +475,25 @@ class _Rig:
 
         self.select()
 
-    def select(self):
-        """Exactly the two temporary objects selected, destination active
-        (re-applied before every bake)."""
+    @staticmethod
+    def _encode(nt, socket, scale, offset):
+        """socket * scale + offset (keeps emitted values non-negative)."""
+        vm = nt.nodes.new("ShaderNodeVectorMath")
+        vm.operation = 'MULTIPLY_ADD'
+        vm.inputs[1].default_value = scale
+        vm.inputs[2].default_value = offset
+        nt.links.new(socket, vm.inputs[0])
+        return vm.outputs["Vector"]
+
+    def select(self, with_source=True):
+        """The temporary objects selected (destination only when baking it
+        by itself), destination active (re-applied before every bake)."""
         vl = self.view_layer
         for o in vl.objects:
             if o.select_get():
                 o.select_set(False)
-        self.src.select_set(True)
+        if with_source:
+            self.src.select_set(True)
         self.dst.select_set(True)
         vl.objects.active = self.dst
 
@@ -387,17 +568,34 @@ class _Rig:
         return ss
 
     def _bake_texture(self, img, w, h, has_alpha, supersample):
-        """Bake ``img`` (shown through the source UVs) into the destination
+        """Move ``img`` (shown through the source UVs) into the destination
         UVs at w x h; returns (float32 (h, w, 4) bottom-up, supersampling)."""
         ss = supersample
         while ss > 1 and w * h * ss * ss > MAX_BAKE_PIXELS:
             ss //= 2
-        buf = bpy.data.images.new(f"{_TMP}_buffer", w * ss, h * ss,
-                                  alpha=True, float_buffer=True,
-                                  is_data=True)
+        if self.settings.mode == 'RESAMPLE':
+            out = self._resample_image(img, w, h, ss)
+        else:
+            out = self._bake_image(img, w, h, ss, has_alpha)
+        if not has_alpha:
+            out[..., 3] = 1.0
+        if ss > 1:      # box filter down to the output resolution
+            bh, bw = out.shape[:2]
+            out = out.reshape(bh // ss, ss, bw // ss, ss, 4).mean(
+                axis=(1, 3), dtype=np.float64).astype(np.float32)
+        return out, ss
+
+    def _new_buffer(self, bw, bh):
+        return bpy.data.images.new(f"{_TMP}_buffer", bw, bh, alpha=True,
+                                   float_buffer=True, is_data=True)
+
+    def _bake_image(self, img, w, h, ss, has_alpha):
+        """Bake mode: Cycles bakes of the image itself (full size)."""
+        buf = self._new_buffer(w * ss, h * ss)
         try:
             self.src_tex.image = img
             self.dst_tex.image = buf
+            fix = self._normal_fix(buf, ss, self.settings.margin * ss)
             nt = self.src_mat.node_tree
             nt.links.new(self.src_tex.outputs["Color"],
                          self.emit.inputs["Color"])
@@ -406,44 +604,217 @@ class _Rig:
                 nt.links.new(self.src_tex.outputs["Alpha"],
                              self.emit.inputs["Color"])
                 out[..., 3] = self._bake(buf, ss)[..., 0]
-            else:
-                out[..., 3] = 1.0
-            return out, ss
+            if fix is not None:
+                idx, uv, found = fix
+                vals = np.zeros((idx.size, 4), np.float32)
+                if found.any():
+                    vals[found] = _sample(_image_rgba(img, w, h), uv[found])
+                out.reshape(-1, 4)[idx] = vals   # no match: like a miss
+            return out
         finally:
             self.src_tex.image = None
             self.dst_tex.image = None
             bpy.data.images.remove(buf)
 
-    def _bake(self, buf, ss):
+    def _resample_image(self, img, w, h, ss):
+        """Resample mode: the image sampled through the cached lookup."""
+        bw, bh = w * ss, h * ss
+        idx, uv, mdst, msrc = self._lookup(bw, bh, ss)
+        out = np.zeros((bh * bw, 4), np.float32)   # misses: like a bake
+        if idx.size:
+            out[idx] = _sample(_image_rgba(img, w, h), uv)
+        out[mdst] = out[msrc]
+        return out.reshape(bh, bw, 4)
+
+    def _lookup(self, bw, bh, ss):
+        """(hit texels, their source UVs, margin dst, margin src) for a
+        bw x bh destination buffer; baked once per size."""
+        key = (bw, bh)
+        if key in self._lookups:
+            return self._lookups[key]
+        buf = self._new_buffer(bw, bh)
+        try:
+            self.dst_tex.image = buf
+            # Texels inside the destination islands (for the margin).
+            self.dst_mat.node_tree.links.new(self.dst_nrm,
+                                             self.dst_emit.inputs["Color"])
+            cov = _decode_unit(self._bake(buf, ss, to_active=False,
+                                          margin=0))
+            covered = np.abs(np.linalg.norm(cov, axis=-1) - 1.0) < 0.25
+            del cov
+            # Source UV under every texel (no margin: UVs don't blend).
+            self.src_mat.node_tree.links.new(self.src_uvenc,
+                                             self.emit.inputs["Color"])
+            px = self._bake(buf, ss, margin=0).reshape(-1, 4)
+            idx = np.flatnonzero(px[:, 2] > 0.5)
+            uv = px[idx, :2].astype(np.float64) * self.uv_span + self.uv_lo
+            del px
+            fix = self._normal_fix(buf, ss, 0)
+            if fix is not None:
+                fidx, fuv, found = fix
+                pos = np.searchsorted(idx, fidx)
+                ok = pos < idx.size
+                ok[ok] = idx[pos[ok]] == fidx[ok]
+                uv[pos[ok & found]] = fuv[ok & found]
+                keep = np.ones(idx.size, bool)
+                keep[pos[ok & ~found]] = False   # no match: a miss
+                idx, uv = idx[keep], uv[keep]
+            mdst, msrc = _margin_map(covered,
+                                     self.settings.margin * ss)
+        finally:
+            self.dst_tex.image = None
+            bpy.data.images.remove(buf)
+        print(f"Wrapper's Delight: resample lookup {bw}x{bh}: "
+              f"{idx.size} texels, {mdst.size} margin")
+        self._lookups[key] = (idx, uv, mdst, msrc)
+        return self._lookups[key]
+
+    def _bake(self, buf, ss, to_active=True, margin=None):
+        """One Emit bake into ``buf`` at its full size: from the source
+        (selected to active), or the destination by itself."""
         b = self.settings
-        self.select()
+        if margin is None:
+            margin = b.margin * ss
+        self.select(with_source=to_active)
         bpy.ops.object.bake(
             type='EMIT',
             target='IMAGE_TEXTURES',
             save_mode='INTERNAL',
             use_clear=True,
-            use_selected_to_active=True,
+            use_selected_to_active=to_active,
             use_cage=False,
             cage_extrusion=self.extrusion,
             max_ray_distance=self.extrusion * 2.0,
-            margin=b.margin * ss,
+            margin=margin,
             margin_type='ADJACENT_FACES',
             uv_layer=self.dst_uv,
         )
         bw, bh = buf.size
         px = np.empty(bw * bh * 4, np.float32)
         buf.pixels.foreach_get(px)
-        px = px.reshape(bh, bw, 4)
-        if ss > 1:      # box filter down to the output resolution
-            px = px.reshape(bh // ss, ss, bw // ss, ss, 4).mean(axis=(1, 3),
-                                                              dtype=np.float64)
-            px = px.astype(np.float32)
-        return px
+        return px.reshape(bh, bw, 4)
+
+    # -- normal matching -------------------------------------------------
+
+    def _normal_fix(self, buf, ss, margin):
+        """(texel indices, source UVs, found) for the texels of a ``buf``
+        sized bake whose hit faces too far from the destination normal;
+        None when there are none or matching is off.  Cached per size."""
+        limit = self.settings.normal_angle
+        if limit >= math.pi - 1e-4:
+            return None
+        key = (tuple(buf.size), margin)
+        if key in self._fixes:
+            return self._fixes[key]
+        cos_lim = math.cos(limit)
+
+        self.dst_mat.node_tree.links.new(self.dst_nrm,
+                                         self.dst_emit.inputs["Color"])
+        nd = _decode_unit(self._bake(buf, ss, to_active=False,
+                                     margin=margin))
+        nd = nd.reshape(-1, 3)
+        self.src_mat.node_tree.links.new(self.src_nrm,
+                                         self.emit.inputs["Color"])
+        ns = _decode_unit(self._bake(buf, ss, margin=margin))
+        ns = ns.reshape(-1, 3)
+        ld = np.linalg.norm(nd, axis=1)
+        ls = np.linalg.norm(ns, axis=1)
+        # Cleared (missed) texels decode to (-1, -1, -1): length sqrt(3).
+        ok = (np.abs(ld - 1.0) < 0.25) & (np.abs(ls - 1.0) < 0.25)
+        dot = (nd * ns).sum(axis=1) / np.maximum(ld * ls, 1e-12)
+        idx = np.flatnonzero(ok & (dot < cos_lim))
+
+        fix = None
+        if idx.size:
+            self.dst_mat.node_tree.links.new(self.dst_pos,
+                                             self.dst_emit.inputs["Color"])
+            pos = self._bake(buf, ss, to_active=False, margin=margin)
+            pos = pos.reshape(-1, 4)[idx, :3]
+            P = pos.astype(np.float64) * self.pos_span + self.pos_lo
+            N = nd[idx] / ld[idx, None]
+            uv, found = self._search(P, N, cos_lim)
+            print(f"Wrapper's Delight: normal matching re-searched "
+                  f"{idx.size} texels, {int(found.sum())} matched")
+            fix = (idx, uv, found)
+        self._fixes[key] = fix
+        return fix
+
+    def _source_geometry(self):
+        if self._geo is None:
+            me = self.src.data
+            v, t = triangles_local(me)
+            M = np.array(self.src.matrix_world, np.float64)
+            vw = v @ M[:3, :3].T + M[:3, 3]
+            loops = np.empty(len(me.loop_triangles) * 3, np.int64)
+            me.loop_triangles.foreach_get("loops", loops)
+            uvl = me.uv_layers[self.src_uv]
+            uv = np.empty(len(me.loops) * 2, np.float64)
+            uvl.uv.foreach_get("vector", uv)
+            tri_uv = uv.reshape(-1, 2)[loops.reshape(-1, 3)]
+            a, b, c = vw[t[:, 0]], vw[t[:, 1]], vw[t[:, 2]]
+            n = np.cross(b - a, c - a)
+            n /= np.maximum(np.linalg.norm(n, axis=1), 1e-30)[:, None]
+            if np.linalg.det(M[:3, :3]) < 0:     # mirrored: winding flips
+                n = -n
+            self._geo = (tree_from_arrays(vw, t), vw, t, n, tri_uv)
+        return self._geo
+
+    def _search(self, P, N, cos_lim):
+        """Blender's bake ray (from P + N * extrusion along -N, up to
+        2 * extrusion) but passing through faces whose normal is more than
+        the limit off N.  Returns (source UVs (m, 2), found (m,))."""
+        from mathutils import Vector
+        tree, vw, t, tri_n, tri_uv = self._source_geometry()
+        ext = self.extrusion
+        reach = ext * 2.0
+        eps = ext * 1e-4
+        m = len(P)
+        tri = np.full(m, -1, np.int64)
+        loc = np.zeros((m, 3))
+        for i in range(m):
+            n = N[i]
+            d = Vector((-n).tolist())
+            o = Vector((P[i] + n * ext).tolist())
+            left = reach
+            for _ in range(64):
+                hit, _nor, ti, dist = tree.ray_cast(o, d, left)
+                if ti is None:
+                    break
+                if tri_n[ti] @ n >= cos_lim:
+                    tri[i] = ti
+                    loc[i] = hit
+                    break
+                left -= dist + eps
+                if left <= 0.0:
+                    break
+                o = hit + d * eps
+        found = tri >= 0
+        uv = np.zeros((m, 2))
+        if found.any():
+            ti = tri[found]
+            a, b, c = (vw[t[ti, k]] for k in range(3))
+            v0, v1, v2 = b - a, c - a, loc[found] - a
+            d00 = (v0 * v0).sum(1)
+            d01 = (v0 * v1).sum(1)
+            d11 = (v1 * v1).sum(1)
+            d20 = (v2 * v0).sum(1)
+            d21 = (v2 * v1).sum(1)
+            den = d00 * d11 - d01 * d01
+            den = np.where(np.abs(den) > 1e-30, den, 1e-30)
+            wb = (d11 * d20 - d01 * d21) / den
+            wc = (d00 * d21 - d01 * d20) / den
+            wa = 1.0 - wb - wc
+            uv[found] = (wa[:, None] * tri_uv[ti, 0] + wb[:, None]
+                         * tri_uv[ti, 1] + wc[:, None] * tri_uv[ti, 2])
+        return uv, found
 
     # -- teardown --------------------------------------------------------
 
     def close(self):
         self.state.restore()
+        self._fixes.clear()
+        self._lookups.clear()
+        self._geo = None
         for obj in self.objs:
             me = obj.data
             bpy.data.objects.remove(obj)

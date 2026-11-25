@@ -15,6 +15,8 @@ samples are generated along each half by arc length when the fit runs (see
 a pair is sampled.
 """
 
+import math
+
 import bpy
 
 RESULT_KEY = "Wrapped"
@@ -143,6 +145,15 @@ BAKE_DIRECTIONS = [
      "cage's UV layout"),
 ]
 
+BAKE_MODES = [
+    ('BAKE', "Bake",
+     "Bake every image with Cycles (one or two bakes per image)"),
+    ('RESAMPLE', "Resample",
+     "Bake one UV lookup map per image size, then resample every image "
+     "through it (much faster for long lists; margin extends the islands "
+     "outwards instead of filling from the adjacent faces)"),
+]
+
 BAKE_SUPERSAMPLE = [
     ('1', "1×", "One sample per output pixel (fastest)"),
     ('2', "2×", "Bake at twice the resolution and filter down "
@@ -162,6 +173,10 @@ class BakeImage(bpy.types.PropertyGroup):
 
 
 class TextureBakeSettings(bpy.types.PropertyGroup):
+    mode: bpy.props.EnumProperty(
+        name="Mode", items=BAKE_MODES, default='BAKE',
+        description="How the images are moved to the other UV layout",
+    )
     images: bpy.props.CollectionProperty(type=BakeImage)
     image_index: bpy.props.IntProperty(name="Active Image", default=0)
     output_dir: bpy.props.StringProperty(
@@ -175,7 +190,7 @@ class TextureBakeSettings(bpy.types.PropertyGroup):
                     "(e.g. skin.png -> skin_baked.png)",
     )
     direction: bpy.props.EnumProperty(
-        name="Direction", items=BAKE_DIRECTIONS, default='CAGE_TO_TARGET',
+        name="Direction", items=BAKE_DIRECTIONS, default='TARGET_TO_CAGE',
         description="Which mesh's UV layout the images are in, and which "
                     "one they are baked into",
     )
@@ -197,6 +212,14 @@ class TextureBakeSettings(bpy.types.PropertyGroup):
                     "as a fraction of the mesh size. Raise it if parts of "
                     "the bake come out black, lower it if thin parts pick "
                     "up the wrong side",
+    )
+    normal_angle: bpy.props.FloatProperty(
+        name="Normal Angle", default=math.radians(60.0),
+        min=0.0, max=math.pi, subtype='ANGLE',
+        description="Only take texture from faces whose normal is within "
+                    "this angle of the surface being baked, so back faces "
+                    "and nearby parts facing another way (back of the ear "
+                    "vs. the head) are passed through. 180 turns it off",
     )
 
 

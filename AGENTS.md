@@ -49,6 +49,18 @@ curves drawn on both meshes. Result is stored in a `Wrapped` shape key.
   raw; float buffer at 1/2/4x then box-filtered; alpha in a 2nd pass;
   pixels written into a fresh load of the source and `Image.save(filepath=)`
   so the file's format/bit depth/channels/codec come from its own ImBuf.
+  Normal matching (`normal_angle`, 180 = off): Blender's bake can't skip
+  faces, so per bake size three extra Emit passes (destination normal and
+  position baked alone, hit True Normal selected-to-active; encoded to be
+  non-negative) find texels whose hit is too far off; those are re-cast in
+  Python on a source `BVHTree` (same ray/reach, bad faces passed through)
+  and filled by bilinear-sampling the source pixels at the new hit's UV.
+  `mode` RESAMPLE: per bake size one selected-to-active pass emits the hit's
+  source UV (encoded, B = 1 marks hits, margin 0) plus a destination-alone
+  coverage pass; normal-matching fixes are merged in, then every image is
+  just `_sample`d through the cached lookup. Margin there is our own
+  outward extension (`_margin_map`, nearest covered texel, ring growth from
+  island borders), not Blender's adjacent-faces fill.
   PSD/PSB bypass Blender's loader/writer: `model/psd.py` reads/writes the
   merged image raw (Gray/RGB, 8/16/32, raw/RLE/ZIP; output flat, raw).
   Output name = stem + `suffix` + ext. UI path is modal (one image per

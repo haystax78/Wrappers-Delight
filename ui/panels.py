@@ -326,6 +326,8 @@ class MESHWRAP_PT_texture_bake(_Panel, bpy.types.Panel):
         mw = context.scene.mesh_wrap
         tb = mw.texture_bake
 
+        layout.row().prop(tb, "mode", expand=True)
+
         row = layout.row()
         row.template_list("MESHWRAP_UL_bake_images", "", tb, "images", tb,
                           "image_index", rows=4)
@@ -345,6 +347,7 @@ class MESHWRAP_PT_texture_bake(_Panel, bpy.types.Panel):
         col.row().prop(tb, "supersample", expand=True)
         col.prop(tb, "margin")
         col.prop(tb, "distance", slider=True)
+        col.prop(tb, "normal_angle")
 
         if fit_ops.result_key(mw.cage) is None:
             layout.label(text="No Wrapped result: cage used as it is",
